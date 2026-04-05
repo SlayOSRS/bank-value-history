@@ -1,0 +1,194 @@
+:root {
+  --bg: #08111d;
+  --card: #0c1727;
+  --card-2: #101f33;
+  --line: #1d3552;
+  --text: #e6eef8;
+  --muted: #8ea5bd;
+  --accent: #4aa3ff;
+  --accent-2: #89c4ff;
+  --good: #4dd28b;
+  --bad: #ff7d7d;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: Arial, Helvetica, sans-serif; }
+a { color: var(--accent-2); }
+button, select, input {
+  background: #12233a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: start;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.topbar h1 { margin: 0 0 4px; font-size: 24px; }
+.topbar p { margin: 0; color: var(--muted); }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.section-nav { display: flex; gap: 10px; padding: 10px 20px 0; }
+.nav-btn.is-active { border-color: var(--accent); color: white; }
+.layout { padding: 16px 20px 30px; display: grid; gap: 16px; }
+.page-section { display: none; gap: 16px; }
+.page-section.is-active { display: grid; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.card-header h2 { margin: 0; font-size: 18px; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.summary-box { padding: 12px; background: var(--card-2); border: 1px solid var(--line); border-radius: 12px; }
+.summary-box .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.summary-box .value { font-size: 18px; font-weight: 700; word-break: break-word; }
+.two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.chart-card canvas { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line); background: #141b24; }
+.compact-table, .holdings-table { width: 100%; border-collapse: collapse; }
+.compact-table th, .compact-table td, .holdings-table th, .holdings-table td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; text-align: left; }
+.compact-table th, .holdings-table th { color: var(--muted); font-size: 12px; }
+.icon-cell { display: inline-flex; align-items: center; gap: 8px; }
+.icon-cell img { width: 28px; height: 28px; image-rendering: pixelated; }
+.row-link { background: transparent; border: 0; color: inherit; padding: 0; font: inherit; text-align: left; }
+.row-link:hover span { text-decoration: underline; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.positive { color: var(--good); }
+.negative { color: var(--bad); }
+.gp-value { white-space: nowrap; }
+.tab-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.tab-btn.is-active { border-color: var(--accent); }
+.bank-recreation { display: block; }
+.bank-overlay-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #0a1320; padding: 8px; }
+.bank-overlay-wrap { position: relative; display: inline-block; }
+.bank-overlay-image { display: block; image-rendering: pixelated; }
+.bank-hotspot {
+  position: absolute;
+  background: transparent;
+  border: 1px solid rgba(74,163,255,0.10);
+  border-radius: 4px;
+  padding: 0;
+}
+.bank-hotspot:hover { border-color: rgba(74,163,255,0.5); background: rgba(74,163,255,0.08); }
+.bank-hotspot.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(74,163,255,0.4) inset; }
+.bank-slot { width: 44px; min-height: 44px; background: #13243a; border: 1px solid var(--line); border-radius: 8px; position: relative; padding: 2px; }
+.bank-slot.placeholder { opacity: 0.45; }
+.bank-slot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.bank-slot .qty { position: absolute; left: 2px; top: 30px; font-size: 10px; color: #f3f06d; text-shadow: 1px 1px 0 #000; }
+.bank-slot.is-selected { outline: 2px solid var(--accent); }
+.browser-layout { grid-template-columns: minmax(0, 1.45fr) minmax(380px, 0.95fr); align-items: start; }
+.browser-side-panel { display: grid; gap: 12px; min-width: 0; }
+.item-panel { display: grid; gap: 12px; }
+.item-head { display: flex; align-items: center; gap: 10px; }
+.item-head img { width: 36px; height: 36px; image-rendering: pixelated; }
+.item-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mini-card { background: var(--card-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-width: 0; }
+.mini-card .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.mini-card .value { font-weight: 700; word-break: break-word; }
+.item-subgrid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(260px, 0.95fr); gap: 12px; }
+.item-subhead { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.history-list { max-height: 280px; overflow: auto; display: grid; gap: 8px; }
+.history-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 8px 10px; background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; }
+.wiki-panel { display: grid; gap: 10px; }
+.wiki-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.note-box { background: rgba(255,255,255,0.03); border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; }
+.stack-box { display: grid; gap: 10px; }
+.estimate-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--card-2); border-radius: 12px; border: 1px solid var(--line); }
+.inline-controls { display: flex; align-items: center; gap: 10px; }
+@media (max-width: 1180px) {
+  .browser-layout, .two-column, .item-subgrid, .item-grid, .wiki-grid { grid-template-columns: 1fr; }
+}
+
+
+/* In-game inspired bank styling */
+.bank-recreation {
+  display: block;
+}
+.bank-overlay-scroll,
+.bank-grid-wrap {
+  overflow: auto;
+  max-width: 100%;
+  border: 2px solid #5f4a27;
+  border-radius: 10px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(145,119,63,0.22), rgba(51,36,18,0.18)),
+    linear-gradient(135deg, #3a2b17 0%, #2a1f12 52%, #1d160d 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 232, 173, 0.12),
+    inset 0 0 0 2px rgba(18, 12, 6, 0.42),
+    0 8px 18px rgba(0, 0, 0, 0.24);
+}
+.bank-grid-wrap {
+  width: max-content;
+}
+.bank-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 44px);
+  grid-auto-rows: 44px;
+  gap: 6px;
+  width: max-content;
+}
+.bank-overlay-wrap {
+  position: relative;
+  display: inline-block;
+  border: 1px solid rgba(233, 196, 106, 0.18);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #22180c;
+}
+.bank-overlay-image {
+  display: block;
+  image-rendering: pixelated;
+  filter: saturate(0.96) contrast(1.02);
+}
+.bank-slot {
+  width: 44px;
+  min-height: 44px;
+  background:
+    linear-gradient(180deg, #4b3820 0%, #2e2112 100%);
+  border: 1px solid #6b5330;
+  border-radius: 6px;
+  position: relative;
+  padding: 2px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 235, 184, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+.bank-slot:hover {
+  border-color: #b7924d;
+  background: linear-gradient(180deg, #5a4326 0%, #342513 100%);
+}
+.bank-slot.is-selected,
+.bank-hotspot.is-selected {
+  outline: 2px solid #c7a155;
+  outline-offset: 0;
+}
+.bank-hotspot:hover {
+  border-color: rgba(199, 161, 85, 0.75);
+  background: rgba(199, 161, 85, 0.12);
+}
+.tab-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.tab-btn {
+  background: linear-gradient(180deg, #4c3a22, #2f2314);
+  border: 1px solid #6e562f;
+  color: #eadfbe;
+}
+.tab-btn.is-active {
+  border-color: #c7a155;
+  color: #fff3ce;
+  box-shadow: inset 0 1px 0 rgba(255,238,188,0.12);
+}
+
+.compare-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+.compare-toolbar label { color: var(--muted); font-size:12px; }
+.compare-summary-grid { margin-top: 4px; }

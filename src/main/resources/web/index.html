@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bank Value History Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Bank Value History</h1>
+      <p id="statusText">Loading snapshots…</p>
+    </div>
+    <div class="controls">
+      <button id="refreshBtn">Refresh</button>
+      <select id="snapshotSelect"></select>
+      <input id="itemSearch" type="search" placeholder="Search item in current view">
+    </div>
+  </header>
+
+  <nav class="section-nav">
+    <button data-section="overview" class="nav-btn is-active">Overview</button>
+    <button data-section="browser" class="nav-btn">Bank Browser</button>
+    <button data-section="market" class="nav-btn">Market</button>
+  </nav>
+
+  <main class="layout">
+    <section id="section-overview" class="page-section is-active">
+      <section class="card summary-grid" id="summaryGrid"></section>
+      <section class="card chart-card">
+        <div class="card-header"><h2>Total captured bank value over time</h2></div>
+        <canvas id="totalChart" width="1200" height="260"></canvas>
+      </section>
+      <section class="card">
+        <div class="card-header"><h2>Compare two saves</h2></div>
+        <div class="compare-toolbar">
+          <label for="compareASelect">A</label>
+          <select id="compareASelect"></select>
+          <label for="compareBSelect">B</label>
+          <select id="compareBSelect"></select>
+        </div>
+        <div id="compareSummaryGrid" class="summary-grid compare-summary-grid"></div>
+      </section>
+      <section class="card two-column">
+        <div>
+          <div class="card-header"><h2>Top rises for selected compare pair</h2></div>
+          <table class="compact-table" id="gainersTable"></table>
+        </div>
+        <div>
+          <div class="card-header"><h2>Top drops for selected compare pair</h2></div>
+          <table class="compact-table" id="losersTable"></table>
+        </div>
+      </section>
+    </section>
+
+    <section id="section-browser" class="page-section">
+      <section class="card two-column browser-layout">
+        <div>
+          <div class="card-header browser-header">
+            <h2>Bank browser</h2>
+          </div>
+          <div class="muted small">Browser uses explicit captured tab/layout data when available. If not, it falls back to bank order reconstruction.</div>
+          <div id="bankTabButtons" class="tab-buttons"></div>
+          <div id="bankRecreation" class="bank-recreation"></div>
+        </div>
+        <div class="browser-side-panel">
+          <div class="card-header"><h2>Selected item</h2></div>
+          <div id="browserItemDetails" class="item-panel">Click an item in the bank browser to inspect it here.</div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card-header"><h2>Items in current view</h2></div>
+        <table class="holdings-table" id="holdingsTable"></table>
+      </section>
+    </section>
+
+    <section id="section-market" class="page-section">
+      <section class="card two-column">
+        <div>
+          <div class="card-header"><h2>Top holdings in snapshot</h2></div>
+          <table class="compact-table" id="topHoldingsTable"></table>
+        </div>
+        <div>
+          <div class="card-header"><h2>Current wiki market estimate</h2></div>
+          <div id="marketEstimateBox" class="stack-box"></div>
+        </div>
+      </section>
+      <section class="card chart-card">
+        <div class="card-header"><h2>Selected item snapshot value history</h2></div>
+        <canvas id="itemValueChart" width="1200" height="240"></canvas>
+      </section>
+      <section class="card chart-card">
+        <div class="card-header"><h2>Selected item quantity history</h2></div>
+        <canvas id="itemQuantityChart" width="1200" height="240"></canvas>
+      </section>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
