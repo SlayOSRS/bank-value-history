@@ -17,14 +17,14 @@ import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
-import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.ItemID;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.Player;
-import net.runelite.api.Varbits;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.game.ItemManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -156,7 +156,7 @@ public class SnapshotService
     {
         Instant capturedAt = Instant.now();
 
-        Widget bankItemWidget = client.getWidget(WidgetInfo.BANK_ITEM_CONTAINER);
+        Widget bankItemWidget = client.getWidget(InterfaceID.Bankmain.ITEMS);
         Rectangle captureBounds = resolveBankCaptureBounds();
         List<LayoutEntry> layoutEntries = readLayoutEntries(bankItemWidget, captureBounds);
 
@@ -217,7 +217,7 @@ public class SnapshotService
             totalHa += haTotal;
         }
 
-        if (client.getVarbitValue(Varbits.CURRENT_BANK_TAB) == 0)
+        if (client.getVarbitValue(VarbitID.BANK_CURRENTTAB) == 0)
         {
             ContainerPrices displayed = getDisplayedBankPrices();
             if (displayed == null)
@@ -262,11 +262,11 @@ public class SnapshotService
     {
         Rectangle union = null;
 
-        union = union(union, getWidgetBounds(WidgetInfo.BANK_CONTAINER));
-        union = union(union, getWidgetBounds(WidgetInfo.BANK_CONTENT_CONTAINER));
-        union = union(union, getWidgetBounds(WidgetInfo.BANK_TAB_CONTAINER));
-        union = union(union, getWidgetBounds(WidgetInfo.BANK_TITLE_BAR));
-        union = union(union, getWidgetBounds(WidgetInfo.BANK_ITEM_CONTAINER));
+        union = union(union, getWidgetBounds(InterfaceID.Bankmain.UNIVERSE));
+        union = union(union, getWidgetBounds(InterfaceID.Bankmain.ITEMS_CONTAINER));
+        union = union(union, getWidgetBounds(InterfaceID.Bankmain.TABS));
+        union = union(union, getWidgetBounds(InterfaceID.Bankmain.TITLE));
+        union = union(union, getWidgetBounds(InterfaceID.Bankmain.ITEMS));
 
         if (union == null)
         {
@@ -281,9 +281,9 @@ public class SnapshotService
         );
     }
 
-    private Rectangle getWidgetBounds(WidgetInfo widgetInfo)
+    private Rectangle getWidgetBounds(int componentId)
     {
-        Widget widget = client.getWidget(widgetInfo);
+        Widget widget = client.getWidget(componentId);
         if (widget == null)
         {
             return null;
@@ -315,7 +315,7 @@ public class SnapshotService
 
     private ContainerPrices getDisplayedBankPrices()
     {
-        Widget title = client.getWidget(WidgetInfo.BANK_TITLE_BAR);
+        Widget title = client.getWidget(InterfaceID.Bankmain.TITLE);
         if (title == null)
         {
             return null;
@@ -388,7 +388,7 @@ public class SnapshotService
 
     private ContainerPrices getWidgetContainerPrices()
     {
-        Widget widget = client.getWidget(WidgetInfo.BANK_ITEM_CONTAINER);
+        Widget widget = client.getWidget(InterfaceID.Bankmain.ITEMS);
         ItemContainer itemContainer = client.getItemContainer(InventoryID.BANK);
         if (widget == null || itemContainer == null)
         {
@@ -438,15 +438,15 @@ public class SnapshotService
     private int[] getBankTabCounts()
     {
         return new int[] {
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_ONE_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_TWO_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_THREE_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_FOUR_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_FIVE_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_SIX_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_SEVEN_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_EIGHT_COUNT)),
-            Math.max(0, client.getVarbitValue(Varbits.BANK_TAB_NINE_COUNT))
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_1)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_2)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_3)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_4)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_5)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_6)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_7)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_8)),
+            Math.max(0, client.getVarbitValue(VarbitID.BANK_TAB_9))
         };
     }
 
@@ -490,7 +490,7 @@ public class SnapshotService
         int[] counts,
         List<VisibleItem> visibleTabItems)
     {
-        int currentTab = client.getVarbitValue(Varbits.CURRENT_BANK_TAB);
+        int currentTab = client.getVarbitValue(VarbitID.BANK_CURRENTTAB);
         if (currentTab >= 1 && currentTab <= counts.length && !visibleTabItems.isEmpty())
         {
             int mainCount = Math.max(0, totalSlots - sum(counts));
@@ -521,7 +521,7 @@ public class SnapshotService
     private List<VisibleItem> readVisibleTabItems()
     {
         List<VisibleItem> visible = new ArrayList<>();
-        Widget widget = client.getWidget(WidgetInfo.BANK_ITEM_CONTAINER);
+        Widget widget = client.getWidget(InterfaceID.Bankmain.ITEMS);
         if (widget == null)
         {
             return visible;
