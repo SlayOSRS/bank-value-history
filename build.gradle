@@ -1,71 +1,64 @@
 plugins {
-	id 'java'
+    id 'java'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
 }
 
 repositories {
-	mavenLocal()
-	maven {
-		url = 'https://repo.runelite.net'
-		content {
-			includeGroupByRegex("net\\.runelite.*")
-		}
-	}
-	mavenCentral()
+    mavenLocal()
+    maven {
+        url = 'https://repo.runelite.net'
+        content {
+            includeGroupByRegex("net\\.runelite.*")
+        }
+    }
+    mavenCentral()
 }
 
 def runeLiteVersion = 'latest.release'
-def pluginMainClass = 'com.bankvaluehistory.BankValueHistoryPluginTest'
+def pluginMainClass = 'com.bankvaluetracker.BankValueTrackerPluginTest'
+def userHome = providers.systemProperty('user.home').get()
+def credentialsFile = file("${userHome}/.runelite/credentials.properties")
 
 dependencies {
-	compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+    compileOnly "net.runelite:client:${runeLiteVersion}"
 
-	compileOnly 'org.projectlombok:lombok:1.18.30'
-	annotationProcessor 'org.projectlombok:lombok:1.18.30'
-
-	testImplementation 'junit:junit:4.12'
-	testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
-	testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation "net.runelite:client:${runeLiteVersion}"
+    testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 
-group = 'com.bankvaluehistory'
-version = '1.0-SNAPSHOT'
+group = 'com.bankvaluetracker'
+version = '0.2.0'
 
 tasks.withType(JavaCompile).configureEach {
-	options.encoding = 'UTF-8'
-	options.release.set(11)
+    options.encoding = 'UTF-8'
+    options.release.set(11)
 }
 
 tasks.register('run', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = pluginMainClass
-	jvmArgs "-ea"
-	args "--developer-mode", "--debug"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = pluginMainClass
+    jvmArgs '-ea'
+    args '--developer-mode', '--debug', '--safe-mode'
+
+    if (credentialsFile.exists()) {
+        args '--sessionfile', credentialsFile.absolutePath
+    }
 }
 
-tasks.register('shadowJar', Jar) {
-	dependsOn configurations.testRuntimeClasspath
-
-	manifest {
-		attributes('Main-Class': pluginMainClass, 'Multi-Release': true)
-	}
-
-	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-	from sourceSets.main.output
-	from sourceSets.test.output
-	from {
-		configurations.testRuntimeClasspath.collect { file ->
-			file.isDirectory() ? file : zipTree(file)
-		}
-	}
-
-	exclude 'META-INF/INDEX.LIST'
-	exclude 'META-INF/*.SF'
-	exclude 'META-INF/*.DSA'
-	exclude 'META-INF/*.RSA'
-	exclude '**/module-info.class'
-
-	group = BasePlugin.BUILD_GROUP
-	archiveClassifier.set('shadow')
-	archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
+tasks.register('printCredentialStatus') {
+    doLast {
+        println "Expected Jagex credential file: ${credentialsFile.absolutePath}"
+        println "Exists: ${credentialsFile.exists()}"
+        if (!credentialsFile.exists()) {
+            println ''
+            println 'RuneLite dev login with a Jagex Account requires launcher-generated credentials.'
+            println 'Generate them once with official RuneLite/Jagex Launcher using --insecure-write-credentials.'
+        }
+    }
 }
