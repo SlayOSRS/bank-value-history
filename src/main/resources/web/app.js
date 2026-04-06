@@ -1,6 +1,9 @@
 const state = {
   status: null,
   snapshots: [],
+  snapshotDetails: {},
+  itemHistoryCache: {},
+  itemHistoryPending: {},
   selectedIndex: -1,
   selectedItemId: null,
   filterText: '',
@@ -12,11 +15,14 @@ const state = {
   activeWikiRange: '1d',
   activeTabIndex: 'all',
   activeSection: 'overview',
-  requestToken: 0
+  requestToken: 0,
+  itemHistoryRequestToken: 0
 };
 
 const els = {
   statusText: document.getElementById('statusText'),
+  profileTitle: document.getElementById('profileTitle'),
+  openDataDirBtn: document.getElementById('openDataDirBtn'),
   refreshBtn: document.getElementById('refreshBtn'),
   snapshotSelect: document.getElementById('snapshotSelect'),
   itemSearch: document.getElementById('itemSearch'),
@@ -58,6 +64,63 @@ function formatGp(value) {
   return `${sign}${formatNumber(Math.abs(num))} gp`;
 }
 
+function trimTrailingZeros(value) {
+  return String(value)
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*[1-9])0+$/, '$1');
+}
+
+function formatCompactGp(value) {
+  const num = Number(value || 0);
+  const abs = Math.abs(num);
+  const sign = num < 0 ? '-' : '';
+  if (abs >= 1_000_000_000) {
+    const decimals = abs >= 100_000_000_000 ? 0 : abs >= 10_000_000_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000_000_000).toFixed(decimals))}B gp`;
+  }
+  if (abs >= 1_000_000) {
+    const decimals = abs >= 100_000_000 ? 0 : abs >= 10_000_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000_000).toFixed(decimals))}M gp`;
+  }
+  if (abs >= 1_000) {
+    const decimals = abs >= 100_000 ? 0 : abs >= 10_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000).toFixed(decimals))}K gp`;
+  }
+  return `${sign}${formatNumber(abs)} gp`;
+}
+
+
+function formatCompactNumber(value) {
+  const num = Number(value || 0);
+  const abs = Math.abs(num);
+  const sign = num < 0 ? '-' : '';
+  if (abs >= 1_000_000_000) {
+    const decimals = abs >= 100_000_000_000 ? 0 : abs >= 10_000_000_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000_000_000).toFixed(decimals))}B`;
+  }
+  if (abs >= 1_000_000) {
+    const decimals = abs >= 100_000_000 ? 0 : abs >= 10_000_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000_000).toFixed(decimals))}M`;
+  }
+  if (abs >= 1_000) {
+    const decimals = abs >= 100_000 ? 0 : abs >= 10_000 ? 1 : 2;
+    return `${sign}${trimTrailingZeros((abs / 1_000).toFixed(decimals))}K`;
+  }
+  return `${sign}${formatNumber(abs)}`;
+}
+
+function formatChartShortTimestamp(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value || '');
+  return date.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatChartTooltipTimestamp(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value || '');
+  return date.toLocaleString();
+}
+
 function gpSpan(value, className = '') {
   const cls = ['gp-value', className].filter(Boolean).join(' ');
   return `<span class="${cls}">${formatGp(value)}</span>`;
@@ -88,6 +151,69 @@ function looseWikiName(name) {
     .trim();
 }
 
+function safeAssetPath(path, fallback = '') {
+  const value = String(path || '');
+  if (/^\/icons\/[A-Za-z0-9._-]+\.png(?:\?.*)?$/.test(value)) return value;
+  if (/^\/data\/[A-Za-z0-9 _-]+\/images\/[A-Za-z0-9._-]+\.(?:png|jpg|jpeg|webp)(?:\?.*)?$/.test(value)) return value;
+  return fallback;
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, { cache: 'no-store', ...options });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `Request failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function snapshotHasDetails(snapshot) {
+  return Boolean(snapshot && Array.isArray(snapshot.items));
+}
+
+async function ensureSnapshotLoaded(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.snapshots.length) return null;
+  const snapshot = state.snapshots[index];
+  if (!snapshot) return null;
+  if (snapshotHasDetails(snapshot)) return snapshot;
+  const key = String(snapshot.capturedAt || '');
+  if (!key) return snapshot;
+  if (state.snapshotDetails[key]) {
+    state.snapshots[index] = state.snapshotDetails[key];
+    return state.snapshotDetails[key];
+  }
+  const detail = await fetchJson(`/api/snapshot?capturedAt=${encodeURIComponent(key)}`);
+  state.snapshotDetails[key] = detail;
+  state.snapshots[index] = detail;
+  return detail;
+}
+
+async function ensureSnapshotsLoaded(indexes) {
+  const unique = [...new Set((indexes || []).filter(index => Number.isInteger(index) && index >= 0))];
+  const results = await Promise.all(unique.map(index => ensureSnapshotLoaded(index)));
+  const map = new Map();
+  unique.forEach((index, idx) => map.set(index, results[idx]));
+  return map;
+}
+
+async function loadItemHistory(itemId) {
+  const key = String(itemId || '');
+  if (!key) return [];
+  if (state.itemHistoryCache[key]) return state.itemHistoryCache[key];
+  if (state.itemHistoryPending[key]) return state.itemHistoryPending[key];
+  state.itemHistoryPending[key] = fetchJson(`/api/item-history?canonicalId=${encodeURIComponent(itemId)}`)
+    .then(history => {
+      state.itemHistoryCache[key] = Array.isArray(history) ? history : [];
+      delete state.itemHistoryPending[key];
+      return state.itemHistoryCache[key];
+    })
+    .catch(error => {
+      delete state.itemHistoryPending[key];
+      throw error;
+    });
+  return state.itemHistoryPending[key];
+}
+
 function currentSnapshot() {
   return state.snapshots[state.selectedIndex] || null;
 }
@@ -114,6 +240,46 @@ function daysAgo(iso, days) {
   return d.toISOString();
 }
 
+function findDynamicDelta(snapshot) {
+  const ranges = [
+    { days: 30, label: 'Delta vs 1 month' },
+    { days: 14, label: 'Delta vs 2 weeks' },
+    { days: 7, label: 'Delta vs 1 week' },
+    { days: 1, label: 'Delta vs 1 day' }
+  ];
+  for (const range of ranges) {
+    const reference = snapshotAtOrBefore(daysAgo(snapshot.capturedAt, range.days));
+    if (reference && reference.capturedAt !== snapshot.capturedAt) {
+      return {
+        label: range.label,
+        valueHtml: gpSpan(Number(snapshot.totalGe || 0) - Number(reference.totalGe || 0), positiveNegativeClass(Number(snapshot.totalGe || 0) - Number(reference.totalGe || 0)))
+      };
+    }
+  }
+  const oldest = state.snapshots[0] || null;
+  if (oldest && oldest.capturedAt !== snapshot.capturedAt) {
+    const delta = Number(snapshot.totalGe || 0) - Number(oldest.totalGe || 0);
+    return {
+      label: 'Delta vs first snapshot',
+      valueHtml: gpSpan(delta, positiveNegativeClass(delta))
+    };
+  }
+  return {
+    label: 'Delta vs history',
+    valueHtml: '<span class="muted">Need more history</span>'
+  };
+}
+
+function updateHeader(snapshot) {
+  const profile = snapshot?.profileKey || state.status?.currentProfile || '';
+  els.profileTitle.textContent = profile ? `— ${profile}` : '';
+  if (!snapshot) {
+    return;
+  }
+  const url = state.status?.dashboardUrl || '';
+  els.statusText.textContent = `Loaded ${state.snapshots.length} snapshot${state.snapshots.length === 1 ? '' : 's'}${url ? ` · ${url}` : ''}`;
+}
+
 function renderCompareControls(snapshot) {
   if (!els.compareASelect || !els.compareBSelect || !els.compareSummaryGrid) return;
   const snapshots = state.snapshots;
@@ -133,20 +299,30 @@ function renderCompareControls(snapshot) {
 
   if (els.compareASelect.dataset.bound !== '1') {
     els.compareASelect.dataset.bound = '1';
-    els.compareASelect.addEventListener('change', () => applyComparison(state.snapshots[Number(els.compareASelect.value)], state.snapshots[Number(els.compareBSelect.value)]));
+    els.compareASelect.addEventListener('change', () => {
+      applyComparisonForIndexes(Number(els.compareASelect.value), Number(els.compareBSelect.value));
+    });
     els.compareBSelect.dataset.bound = '1';
-    els.compareBSelect.addEventListener('change', () => applyComparison(state.snapshots[Number(els.compareASelect.value)], state.snapshots[Number(els.compareBSelect.value)]));
+    els.compareBSelect.addEventListener('change', () => {
+      applyComparisonForIndexes(Number(els.compareASelect.value), Number(els.compareBSelect.value));
+    });
   }
 
   const aIndex = state.selectedIndex;
   const bIndex = Math.max(0, state.selectedIndex - 1);
   els.compareASelect.value = String(aIndex);
   els.compareBSelect.value = String(bIndex);
-  applyComparison(snapshots[aIndex], snapshots[bIndex]);
+  applyComparisonForIndexes(aIndex, bIndex);
+}
+
+async function applyComparisonForIndexes(aIndex, bIndex) {
+  if (!Number.isInteger(aIndex) || !Number.isInteger(bIndex)) return;
+  const loaded = await ensureSnapshotsLoaded([aIndex, bIndex]);
+  applyComparison(loaded.get(aIndex) || state.snapshots[aIndex], loaded.get(bIndex) || state.snapshots[bIndex]);
 }
 
 function applyComparison(current, previous) {
-  if (!current || !previous) return;
+  if (!current || !previous || !snapshotHasDetails(current) || !snapshotHasDetails(previous)) return;
   const geDelta = Number(current.totalGe || 0) - Number(previous.totalGe || 0);
   const haDelta = Number(current.totalHa || 0) - Number(previous.totalHa || 0);
   els.compareSummaryGrid.innerHTML = [
@@ -172,7 +348,10 @@ function orderedSnapshotItems(snapshot) {
     const bx = Number(b.slotIndex ?? b.slot ?? 0);
     return ax - bx;
   });
-  return items;
+  return items.map(item => ({
+    ...item,
+    iconPath: safeAssetPath(item.iconPath, `/icons/${item.canonicalItemId}.png`)
+  }));
 }
 
 function getExplicitTabIndex(item) {
@@ -319,20 +498,17 @@ function renderMoverRows(table, rows, valueTitle) {
 }
 
 function renderSummary(snapshot, previous) {
-  const delta = previous ? snapshot.totalGe - previous.totalGe : 0;
-  const monthSnapshot = snapshotAtOrBefore(daysAgo(snapshot.capturedAt, 30));
-  const monthDelta = monthSnapshot ? snapshot.totalGe - monthSnapshot.totalGe : 0;
+  const delta = previous ? Number(snapshot.totalGe || 0) - Number(previous.totalGe || 0) : 0;
+  const dynamicDelta = findDynamicDelta(snapshot);
   const items = decorateItems(snapshot).filter(item => !item.placeholder);
   const cards = [
-    ['Profile', escapeHtml(snapshot.profileKey)],
     ['Captured', escapeHtml(new Date(snapshot.capturedAt).toLocaleString())],
     ['Captured GE', gpSpan(snapshot.totalGe)],
     ['Captured HA', gpSpan(snapshot.totalHa)],
     ['Real items', numberSpan(items.length)],
     ['Total quantity', numberSpan(items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))],
-    ['Delta vs previous', gpSpan(delta, positiveNegativeClass(delta))],
-    ['Delta vs 1 month', monthSnapshot ? gpSpan(monthDelta, positiveNegativeClass(monthDelta)) : '<span class="muted">Not enough history</span>'],
-    ['Dashboard data dir', escapeHtml(state.status?.baseDir || '')]
+    ['Delta vs previous', previous ? gpSpan(delta, positiveNegativeClass(delta)) : '<span class="muted">No previous snapshot</span>'],
+    [dynamicDelta.label, dynamicDelta.valueHtml]
   ];
   els.summaryGrid.innerHTML = cards.map(([label, value]) => `
     <div class="summary-box">
@@ -342,24 +518,177 @@ function renderSummary(snapshot, previous) {
   `).join('');
 }
 
+function ensureChartTooltip(canvas) {
+  const host = canvas.closest('.chart-card') || canvas.parentElement;
+  if (!host) return null;
+  let tooltip = host.querySelector('.chart-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.className = 'chart-tooltip';
+    host.appendChild(tooltip);
+  }
+  return tooltip;
+}
+
+function hideChartTooltip(canvas) {
+  const tooltip = ensureChartTooltip(canvas);
+  if (!tooltip) return;
+  tooltip.classList.remove('is-visible', 'is-below');
+  tooltip.innerHTML = '';
+}
+
+function positionChartTooltip(canvas, tooltip, pointX, pointY) {
+  const host = canvas.closest('.chart-card') || canvas.parentElement;
+  if (!host) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const hostRect = host.getBoundingClientRect();
+  const leftBase = canvasRect.left - hostRect.left + ((pointX / canvas.width) * canvasRect.width);
+  const topBase = canvasRect.top - hostRect.top + ((pointY / canvas.height) * canvasRect.height);
+  tooltip.style.left = `${leftBase}px`;
+  tooltip.style.top = `${topBase}px`;
+  tooltip.classList.add('is-visible');
+  tooltip.classList.remove('is-below');
+
+  const pad = 10;
+  const tooltipRect = tooltip.getBoundingClientRect();
+  let finalLeft = leftBase;
+  const half = tooltipRect.width / 2;
+  const minLeft = pad + half;
+  const maxLeft = Math.max(minLeft, hostRect.width - pad - half);
+  finalLeft = Math.max(minLeft, Math.min(maxLeft, finalLeft));
+
+  const aboveTop = topBase - tooltipRect.height - 14;
+  const useBelow = aboveTop < pad;
+  tooltip.classList.toggle('is-below', useBelow);
+  let finalTop = useBelow ? Math.min(hostRect.height - pad, topBase + 18) : topBase;
+
+  tooltip.style.left = `${finalLeft}px`;
+  tooltip.style.top = `${finalTop}px`;
+}
+
+function bindChartInteractions(canvas) {
+  if (!canvas || canvas.dataset.chartBound === '1') return;
+  canvas.dataset.chartBound = '1';
+
+  const resolveHoverIndex = event => {
+    const chartState = canvas._chartState;
+    const coords = chartState?.coords || [];
+    if (!coords.length) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+    let bestIndex = null;
+    let bestDistance = Infinity;
+    coords.forEach((coord, index) => {
+      const dx = coord.x - x;
+      const dy = coord.y - y;
+      const distance = Math.sqrt((dx * dx) + (dy * dy));
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+    return bestDistance <= 28 ? bestIndex : null;
+  };
+
+  const updateHover = event => {
+    const chartState = canvas._chartState;
+    if (!chartState || !chartState.coords?.length) {
+      hideChartTooltip(canvas);
+      canvas.style.cursor = 'default';
+      return;
+    }
+    const hoverIndex = resolveHoverIndex(event);
+    if (hoverIndex === null) {
+      if (chartState.hoverIndex !== null) {
+        chartState.hoverIndex = null;
+        drawLineChart(canvas, chartState.points, chartState.color, chartState.options);
+      }
+      hideChartTooltip(canvas);
+      canvas.style.cursor = 'default';
+      return;
+    }
+
+    if (chartState.hoverIndex !== hoverIndex) {
+      chartState.hoverIndex = hoverIndex;
+      drawLineChart(canvas, chartState.points, chartState.color, chartState.options);
+    }
+
+    const coord = (canvas._chartState?.coords || [])[hoverIndex];
+    const point = coord?.point;
+    const tooltip = ensureChartTooltip(canvas);
+    if (!coord || !point || !tooltip) return;
+    const valueFormatter = chartState.options?.tooltipValueFormatter || chartState.options?.valueFormatter || formatGp;
+    const title = point.tooltipLabel || point.label || '';
+    tooltip.innerHTML = `
+      <div class="chart-tooltip-title">${escapeHtml(title)}</div>
+      <div class="chart-tooltip-value">${escapeHtml(valueFormatter(point.value))}</div>
+    `;
+    positionChartTooltip(canvas, tooltip, coord.x, coord.y);
+    canvas.style.cursor = chartState.options?.onPointClick ? 'pointer' : 'crosshair';
+  };
+
+  canvas.addEventListener('mousemove', updateHover);
+  canvas.addEventListener('mouseleave', () => {
+    const chartState = canvas._chartState;
+    if (chartState && chartState.hoverIndex !== null) {
+      chartState.hoverIndex = null;
+      drawLineChart(canvas, chartState.points, chartState.color, chartState.options);
+    }
+    hideChartTooltip(canvas);
+    canvas.style.cursor = 'default';
+  });
+  canvas.addEventListener('click', event => {
+    const chartState = canvas._chartState;
+    if (!chartState?.options?.onPointClick) return;
+    const hoverIndex = resolveHoverIndex(event);
+    if (hoverIndex === null) return;
+    const point = chartState.points[hoverIndex];
+    chartState.options.onPointClick(point, hoverIndex);
+  });
+}
+
 function drawLineChart(canvas, points, color = '#7cc5ff', options = {}) {
+  if (!canvas) return;
+  bindChartInteractions(canvas);
   const ctx = canvas.getContext('2d');
   const width = canvas.width;
   const height = canvas.height;
+  const axisFormatter = options.axisFormatter || options.valueFormatter || formatGp;
+  const valueFormatter = options.valueFormatter || formatGp;
+  const xLabelFormatter = options.xLabelFormatter || (point => point.label || '');
+  const hoverIndex = canvas._chartState?.hoverIndex ?? null;
+
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = '#141b24';
   ctx.fillRect(0, 0, width, height);
+
   if (!points || !points.length) {
+    canvas._chartState = { points: [], color, options, hoverIndex: null, coords: [] };
     ctx.fillStyle = '#9ab0c7';
     ctx.font = '16px Arial';
     ctx.fillText('No data available yet.', 20, 30);
+    hideChartTooltip(canvas);
     return;
   }
-  const padding = { left: 70, right: 20, top: 20, bottom: 35 };
+
+  const padding = { left: 76, right: 24, top: 20, bottom: 42 };
   const min = Math.min(...points.map(p => Number(p.value || 0)));
   const max = Math.max(...points.map(p => Number(p.value || 0)));
   const span = Math.max(1, max - min);
-  const xStep = points.length > 1 ? (width - padding.left - padding.right) / (points.length - 1) : 1;
+  const plotWidth = Math.max(1, width - padding.left - padding.right);
+  const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+  const xStep = points.length > 1 ? plotWidth / (points.length - 1) : 0;
+
+  ctx.strokeStyle = '#22354d';
+  ctx.lineWidth = 1;
+  [0, 0.25, 0.5, 0.75, 1].forEach(ratio => {
+    const y = padding.top + (plotHeight * ratio);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(width - padding.right, y);
+    ctx.stroke();
+  });
 
   ctx.strokeStyle = '#2b4260';
   ctx.beginPath();
@@ -369,47 +698,114 @@ function drawLineChart(canvas, points, color = '#7cc5ff', options = {}) {
   ctx.stroke();
 
   const coords = [];
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
   points.forEach((point, idx) => {
-    const x = padding.left + idx * xStep;
-    const y = height - padding.bottom - ((Number(point.value || 0) - min) / span) * (height - padding.top - padding.bottom);
-    coords.push({ x, y, point });
+    const x = padding.left + (idx * xStep);
+    const y = height - padding.bottom - (((Number(point.value || 0) - min) / span) * plotHeight);
+    coords.push({ x, y, point, index: idx });
+  });
+
+  ctx.save();
+  ctx.beginPath();
+  coords.forEach(({ x, y }, idx) => {
+    if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(coords[coords.length - 1].x, height - padding.bottom);
+  ctx.lineTo(coords[0].x, height - padding.bottom);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(124, 197, 255, 0.12)';
+  ctx.fill();
+  ctx.restore();
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.25;
+  ctx.beginPath();
+  coords.forEach(({ x, y }, idx) => {
     if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  ctx.fillStyle = color;
-  coords.forEach(({ x, y }) => {
+  if (hoverIndex !== null && coords[hoverIndex]) {
+    const hover = coords[hoverIndex];
+    ctx.strokeStyle = 'rgba(214, 231, 248, 0.35)';
+    ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.moveTo(hover.x, padding.top);
+    ctx.lineTo(hover.x, height - padding.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  coords.forEach(({ x, y }, idx) => {
+    const isHover = idx === hoverIndex;
+    ctx.beginPath();
+    ctx.arc(x, y, isHover ? 6 : 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = isHover ? '#ffffff' : color;
     ctx.fill();
+    if (isHover) {
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   });
 
   if (options.showPointLabels) {
     ctx.fillStyle = '#d7e7f8';
     ctx.font = '11px Arial';
+    const labelFormatter = options.compactPointLabels ? formatCompactGp : valueFormatter;
+    const placedLabels = [];
     coords.forEach(({ x, y, point }, idx) => {
-      const text = formatGp(point.value);
+      const text = labelFormatter(point.value);
       const tw = ctx.measureText(text).width;
-      const tx = idx === coords.length - 1 ? Math.max(4, x - tw - 6) : Math.min(width - tw - 4, x + 6);
-      const ty = Math.max(14, y - 8);
-      ctx.fillText(text, tx, ty);
+      const baseX = Math.max(4, Math.min(width - tw - 4, x - (tw / 2)));
+      const candidateYs = [Math.max(14, y - 10), Math.min(height - padding.bottom - 6, y + 16), Math.max(14, y - 24), Math.min(height - padding.bottom - 6, y + 30)];
+      const boxHeight = 12;
+      let placed = false;
+      for (const ty of candidateYs) {
+        const box = { left: baseX - 2, right: baseX + tw + 2, top: ty - boxHeight, bottom: ty + 2 };
+        const overlaps = placedLabels.some(other => !(box.right < other.left || box.left > other.right || box.bottom < other.top || box.top > other.bottom));
+        if (overlaps) continue;
+        ctx.fillText(text, baseX, ty);
+        placedLabels.push(box);
+        placed = true;
+        break;
+      }
+      if (!placed && options.forceEdgeLabels && (idx === 0 || idx === coords.length - 1)) {
+        const ty = Math.max(14, y - 10);
+        ctx.fillText(text, baseX, ty);
+      }
     });
   }
 
   ctx.fillStyle = '#d7e7f8';
   ctx.font = '12px Arial';
-  ctx.fillText(formatGp(max), 10, padding.top + 4);
-  ctx.fillText(formatGp(min), 10, height - padding.bottom);
-  ctx.fillText(points[0].label || '', padding.left, height - 10);
+  ctx.fillText(axisFormatter(max), 10, padding.top + 4);
+  ctx.fillText(axisFormatter(min), 10, height - padding.bottom);
+  const firstLabel = xLabelFormatter(points[0]);
+  ctx.fillText(firstLabel, padding.left, height - 12);
   if (points.length > 1) {
-    const label = points[points.length - 1].label || '';
-    const w = ctx.measureText(label).width;
-    ctx.fillText(label, width - padding.right - w, height - 10);
+    const lastLabel = xLabelFormatter(points[points.length - 1]);
+    const labelWidth = ctx.measureText(lastLabel).width;
+    ctx.fillText(lastLabel, width - padding.right - labelWidth, height - 12);
+  }
+
+  canvas._chartState = { points, color, options, hoverIndex, coords };
+  if (hoverIndex !== null && coords[hoverIndex]) {
+    const tooltip = ensureChartTooltip(canvas);
+    if (tooltip) {
+      const point = coords[hoverIndex].point;
+      tooltip.innerHTML = `
+        <div class="chart-tooltip-title">${escapeHtml(point.tooltipLabel || point.label || '')}</div>
+        <div class="chart-tooltip-value">${escapeHtml((options.tooltipValueFormatter || valueFormatter)(point.value))}</div>
+      `;
+      positionChartTooltip(canvas, tooltip, coords[hoverIndex].x, coords[hoverIndex].y);
+    }
+  } else {
+    hideChartTooltip(canvas);
   }
 }
+
 
 function derivedTabs(snapshot) {
   const items = decorateItems(snapshot);
@@ -434,11 +830,45 @@ function getTabImagePath(snapshot, tabIndex) {
     tab?.imagePath, tab?.screenshotPath, tab?.renderPath, tab?.pngPath,
     snapshot?.bankImagePath, snapshot?.imagePath, snapshot?.screenshotPath
   ];
-  return candidates.find(Boolean) || null;
+  return safeAssetPath(candidates.find(Boolean) || '', '');
+}
+
+function getCapturedBankTabIndex(snapshot) {
+  const value = Number(snapshot?.capturedBankTabIndex ?? snapshot?.currentBankTab ?? -1);
+  return Number.isFinite(value) ? value : -1;
+}
+
+function shouldUseTabOverlay(snapshot, items) {
+  if (state.activeTabIndex === 'all') return false;
+  const activeTab = Number(state.activeTabIndex);
+  const capturedTab = getCapturedBankTabIndex(snapshot);
+  if (!Number.isFinite(activeTab) || activeTab <= 0) return false;
+  if (capturedTab !== activeTab) return false;
+  return Boolean(getTabImagePath(snapshot, activeTab)) && hasOverlayData(items);
+}
+
+function itemOverlayLeft(item) {
+  const value = Number(item?.x ?? item?.layoutX ?? -1);
+  return Number.isFinite(value) ? value : -1;
+}
+
+function itemOverlayTop(item) {
+  const value = Number(item?.y ?? item?.layoutY ?? -1);
+  return Number.isFinite(value) ? value : -1;
+}
+
+function itemOverlayWidth(item) {
+  const value = Number(item?.width ?? item?.w ?? item?.layoutW ?? 36);
+  return Number.isFinite(value) && value > 0 ? value : 36;
+}
+
+function itemOverlayHeight(item) {
+  const value = Number(item?.height ?? item?.h ?? item?.layoutH ?? 32);
+  return Number.isFinite(value) && value > 0 ? value : 32;
 }
 
 function hasOverlayData(items) {
-  return items.some(item => Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)));
+  return items.some(item => itemOverlayLeft(item) >= 0 && itemOverlayTop(item) >= 0);
 }
 
 function renderAllTabGroups(snapshot, items) {
@@ -494,17 +924,17 @@ function renderBankTabButtons(snapshot) {
 function renderBankOverlay(snapshot, items) {
   const imagePath = getTabImagePath(snapshot, state.activeTabIndex === 'all' ? 0 : state.activeTabIndex);
   if (!imagePath || !hasOverlayData(items)) return false;
-  const width = Math.max(...items.map(i => Number(i.x || 0) + Number(i.width || i.w || 36)), 0) + 8;
-  const height = Math.max(...items.map(i => Number(i.y || 0) + Number(i.height || i.h || 32)), 0) + 8;
+  const width = Math.max(...items.map(i => itemOverlayLeft(i) + itemOverlayWidth(i)), 0) + 8;
+  const height = Math.max(...items.map(i => itemOverlayTop(i) + itemOverlayHeight(i)), 0) + 8;
   els.bankRecreation.innerHTML = `
     <div class="bank-overlay-scroll">
       <div class="bank-overlay-wrap" style="width:${width}px;height:${height}px;">
         <img class="bank-overlay-image" src="${imagePath}" alt="Bank tab screenshot">
         ${items.map(item => {
-          const left = Number(item.x || 0);
-          const top = Number(item.y || 0);
-          const w = Number(item.width || item.w || 36);
-          const h = Number(item.height || item.h || 32);
+          const left = itemOverlayLeft(item);
+          const top = itemOverlayTop(item);
+          const w = itemOverlayWidth(item);
+          const h = itemOverlayHeight(item);
           return `<button class="bank-hotspot ${state.selectedItemId === item.canonicalItemId ? 'is-selected' : ''}" data-item-id="${item.canonicalItemId}" style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;" title="${escapeHtml(item.name)} | Qty ${formatNumber(item.quantity)} | GE ${formatGp(item.geTotal)} | HA ${formatGp(item.haTotal)}"></button>`;
         }).join('')}
       </div>
@@ -520,7 +950,7 @@ function renderBankOverlay(snapshot, items) {
 
 function renderBankGrid(snapshot) {
   const items = visibleItems(snapshot);
-  if (state.activeTabIndex !== 'all' && renderBankOverlay(snapshot, items)) {
+  if (shouldUseTabOverlay(snapshot, items) && renderBankOverlay(snapshot, items)) {
     return;
   }
 
@@ -586,8 +1016,7 @@ function formatTimestamp(seconds) {
 async function fetchWikiTimeseries(itemId, timestep) {
   const key = `${itemId}:${timestep}`;
   if (state.wikiTimeseriesCache[key]) return state.wikiTimeseriesCache[key];
-  const res = await fetch(`/api/item-timeseries?id=${itemId}&timestep=${encodeURIComponent(timestep)}`, { cache: 'no-store' });
-  const payload = await res.json();
+  const payload = await fetchJson(`/api/item-timeseries?id=${itemId}&timestep=${encodeURIComponent(timestep)}`);
   state.wikiTimeseriesCache[key] = payload;
   return payload;
 }
@@ -629,7 +1058,7 @@ async function renderWikiChart(itemId, range) {
     const payload = await fetchWikiTimeseries(itemId, cfg.timestep);
     if (token !== state.requestToken) return;
     const points = parseWikiPoints(payload, cfg.timestep, cfg.hours);
-    drawLineChart(canvas, points, '#89c4ff');
+    drawLineChart(canvas, points, '#89c4ff', { valueFormatter: formatGp, axisFormatter: formatCompactGp, xLabelFormatter: point => point.label || '' });
   } catch (e) {
     if (token !== state.requestToken) return;
     drawLineChart(canvas, []);
@@ -637,16 +1066,16 @@ async function renderWikiChart(itemId, range) {
 }
 
 function itemSeriesFromSnapshots(itemId) {
-  return state.snapshots.map(snapshot => {
-    const item = decorateItems(snapshot).find(entry => entry.canonicalItemId === itemId);
-    return {
-      label: snapshot.day,
-      value: item ? item.geTotal : 0,
-      quantity: item ? item.quantity : 0,
-      tabName: item ? item.effectiveTabName : 'Missing',
-      item
-    };
-  });
+  const history = state.itemHistoryCache[String(itemId || '')] || [];
+  return history.map((entry, index) => ({
+    label: formatChartShortTimestamp(entry.capturedAt),
+    tooltipLabel: formatChartTooltipTimestamp(entry.capturedAt),
+    value: Number(entry.geTotal || 0),
+    quantity: Number(entry.quantity || 0),
+    tabName: entry.present ? (entry.tabName || 'Main') : 'Missing',
+    snapshotIndex: index,
+    item: entry.present ? entry : null
+  }));
 }
 
 function renderBrowserItemDetails(snapshot) {
@@ -655,16 +1084,19 @@ function renderBrowserItemDetails(snapshot) {
     els.browserItemDetails.innerHTML = '<div class="muted">No item selected in this view.</div>';
     return;
   }
-  const series = itemSeriesFromSnapshots(item.canonicalItemId).filter(point => point.item).slice(-5).reverse();
+  const cachedHistory = state.itemHistoryCache[String(item.canonicalItemId || '')] || null;
+  const series = (cachedHistory ? itemSeriesFromSnapshots(item.canonicalItemId) : []).filter(point => point.item).slice(-5).reverse();
   const wiki = resolveWikiEntry(item);
 
-  const historyRows = series.map(point => `
-    <div class="history-row">
-      <span>${escapeHtml(point.label)}</span>
-      <span>${escapeHtml(point.tabName)}</span>
-      <span>${gpSpan(point.item.geTotal)}</span>
-    </div>
-  `).join('') || '<div class="muted">No snapshot history for this item.</div>';
+  const historyRows = cachedHistory
+    ? (series.map(point => `
+        <div class="history-row">
+          <span>${escapeHtml(point.label)}</span>
+          <span>${escapeHtml(point.tabName)}</span>
+          <span>${gpSpan(point.item.geTotal)}</span>
+        </div>
+      `).join('') || '<div class="muted">No snapshot history for this item.</div>')
+    : '<div class="muted">Loading snapshot history…</div>';
 
   let wikiHtml = '<div class="note-box">This item does not have a matching OSRS Wiki market entry. The captured item id, canonical id, exact item name, and simplified item name were checked.</div>';
   if (wiki) {
@@ -743,6 +1175,19 @@ function renderBrowserItemDetails(snapshot) {
       renderWikiChart(wiki.id, state.activeWikiRange);
     });
     renderWikiChart(wiki.id, state.activeWikiRange);
+  }
+
+  if (!cachedHistory) {
+    loadItemHistory(item.canonicalItemId)
+      .then(() => {
+        const latestSnapshot = currentSnapshot();
+        const currentItem = currentBrowserItem(latestSnapshot);
+        if (latestSnapshot && currentItem && Number(currentItem.canonicalItemId) === Number(item.canonicalItemId)) {
+          renderBrowserItemDetails(latestSnapshot);
+          renderSelectedItemCharts();
+        }
+      })
+      .catch(() => {});
   }
 }
 
@@ -844,9 +1289,51 @@ function renderSelectedItemCharts() {
     drawLineChart(els.itemQuantityChart, []);
     return;
   }
+
+  const key = String(item.canonicalItemId || '');
+  const cached = state.itemHistoryCache[key];
+  if (!cached) {
+    drawLineChart(els.itemValueChart, []);
+    drawLineChart(els.itemQuantityChart, []);
+    const token = ++state.itemHistoryRequestToken;
+    loadItemHistory(item.canonicalItemId)
+      .then(() => {
+        const latestSnapshot = currentSnapshot();
+        const currentItem = currentItemFromLatest();
+        if (token !== state.itemHistoryRequestToken) return;
+        if (latestSnapshot && currentItem && Number(currentItem.canonicalItemId) === Number(item.canonicalItemId)) {
+          renderSelectedItemCharts();
+        }
+      })
+      .catch(() => {
+        if (token !== state.itemHistoryRequestToken) return;
+        drawLineChart(els.itemValueChart, []);
+        drawLineChart(els.itemQuantityChart, []);
+      });
+    return;
+  }
+
   const series = itemSeriesFromSnapshots(item.canonicalItemId);
-  drawLineChart(els.itemValueChart, series.map(point => ({ label: point.label, value: point.value })), '#ffd166');
-  drawLineChart(els.itemQuantityChart, series.map(point => ({ label: point.label, value: point.quantity })), '#7bd389');
+  drawLineChart(els.itemValueChart, series.map(point => ({
+    label: point.label,
+    tooltipLabel: point.tooltipLabel,
+    value: point.value,
+    snapshotIndex: point.snapshotIndex
+  })), '#ffd166', {
+    valueFormatter: formatGp,
+    axisFormatter: formatCompactGp,
+    xLabelFormatter: point => point.label
+  });
+  drawLineChart(els.itemQuantityChart, series.map(point => ({
+    label: point.label,
+    tooltipLabel: point.tooltipLabel,
+    value: point.quantity,
+    snapshotIndex: point.snapshotIndex
+  })), '#7bd389', {
+    valueFormatter: value => formatNumber(value),
+    axisFormatter: formatCompactNumber,
+    xLabelFormatter: point => point.label
+  });
 }
 
 function switchSection(section) {
@@ -866,6 +1353,7 @@ function selectItem(itemId) {
 function render() {
   const snapshot = currentSnapshot();
   if (!snapshot) {
+    els.profileTitle.textContent = '';
     els.statusText.textContent = 'No bank snapshots found yet. Open the bank in RuneLite and capture one.';
     els.summaryGrid.innerHTML = '';
     els.bankRecreation.innerHTML = '';
@@ -877,12 +1365,33 @@ function render() {
     drawLineChart(els.itemQuantityChart, []);
     return;
   }
-  els.statusText.textContent = `Loaded ${state.snapshots.length} snapshots for ${snapshot.profileKey}. ${state.status?.dashboardUrl || ''}`;
+  updateHeader(snapshot);
   renderSummary(snapshot, previousSnapshot());
   renderCompareControls(snapshot);
   renderBrowser(snapshot);
   renderMarket(snapshot);
-  drawLineChart(els.totalChart, state.snapshots.map(s => ({ label: s.day, value: s.totalGe })), '#7cc5ff', { showPointLabels: true });
+  drawLineChart(els.totalChart, state.snapshots.map((s, index) => ({
+    label: formatChartShortTimestamp(s.capturedAt),
+    tooltipLabel: formatChartTooltipTimestamp(s.capturedAt),
+    value: s.totalGe,
+    snapshotIndex: index
+  })), '#7cc5ff', {
+    valueFormatter: formatGp,
+    axisFormatter: formatCompactGp,
+    xLabelFormatter: point => point.label,
+    onPointClick: point => {
+      if (!Number.isInteger(point?.snapshotIndex)) return;
+      state.selectedIndex = point.snapshotIndex;
+      els.snapshotSelect.value = String(point.snapshotIndex);
+      state.activeTabIndex = 'all';
+      ensureSnapshotLoaded(point.snapshotIndex)
+        .then(() => loadLivePrices())
+        .then(() => render())
+        .catch(error => {
+          els.statusText.textContent = `Failed to load snapshot: ${error}`;
+        });
+    }
+  });
 }
 
 function populateSnapshotSelect() {
@@ -919,8 +1428,7 @@ function buildMappingIndexes(entries) {
 }
 
 async function loadWikiMapping() {
-  const res = await fetch('/api/wiki-mapping', { cache: 'no-store' });
-  const payload = await res.json();
+  const payload = await fetchJson('/api/wiki-mapping');
   const idx = buildMappingIndexes(payload);
   state.wikiMappingById = idx.byId;
   state.wikiMappingByName = idx.byName;
@@ -943,28 +1451,42 @@ async function loadLivePrices() {
     state.livePriceMap = {};
     return;
   }
-  const res = await fetch(`/api/wiki-prices?ids=${ids}`, { cache: 'no-store' });
-  const payload = await res.json();
+  const payload = await fetchJson(`/api/wiki-prices?ids=${ids}`);
   state.livePriceMap = payload.data || {};
 }
 
 async function loadData() {
-  const [statusRes, snapshotsRes] = await Promise.all([
-    fetch('/api/status', { cache: 'no-store' }),
-    fetch('/api/snapshots', { cache: 'no-store' })
+  const [status, summaries] = await Promise.all([
+    fetchJson('/api/status'),
+    fetchJson('/api/snapshots')
   ]);
-  state.status = await statusRes.json();
-  state.snapshots = await snapshotsRes.json();
+  state.status = status;
+  state.snapshots = Array.isArray(summaries) ? summaries : [];
+  state.snapshotDetails = {};
+  state.itemHistoryCache = {};
+  state.itemHistoryPending = {};
   state.snapshots.sort((a, b) => String(a.capturedAt).localeCompare(String(b.capturedAt)));
   populateSnapshotSelect();
+  await ensureSnapshotLoaded(state.selectedIndex);
   await Promise.all([loadWikiMapping(), loadLivePrices()]);
   render();
 }
 
 els.refreshBtn.addEventListener('click', loadData);
+els.openDataDirBtn.addEventListener('click', async () => {
+  try {
+    await fetchJson('/api/open-data-dir', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+  } catch (error) {
+    els.statusText.textContent = `Failed to open data folder: ${error}`;
+  }
+});
 els.snapshotSelect.addEventListener('change', async event => {
   state.selectedIndex = Number(event.target.value);
   state.activeTabIndex = 'all';
+  await ensureSnapshotLoaded(state.selectedIndex);
   await loadLivePrices();
   render();
 });
@@ -980,5 +1502,6 @@ els.itemSearch.addEventListener('input', event => {
 els.navButtons.forEach(btn => btn.addEventListener('click', () => switchSection(btn.dataset.section)));
 
 loadData().catch(error => {
+  els.profileTitle.textContent = '';
   els.statusText.textContent = `Failed to load dashboard data: ${error}`;
 });

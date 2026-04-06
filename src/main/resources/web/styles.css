@@ -31,9 +31,11 @@ button:hover { border-color: var(--accent); }
   padding: 16px 20px;
   border-bottom: 1px solid var(--line);
 }
-.topbar h1 { margin: 0 0 4px; font-size: 24px; }
+.topbar h1 { margin: 0 0 4px; font-size: 24px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .topbar p { margin: 0; color: var(--muted); }
-.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.topbar-title { min-width: 0; }
+.title-profile { color: var(--accent-2); font-size: 20px; font-weight: 600; }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .section-nav { display: flex; gap: 10px; padding: 10px 20px 0; }
 .nav-btn.is-active { border-color: var(--accent); color: white; }
 .layout { padding: 16px 20px 30px; display: grid; gap: 16px; }
@@ -42,6 +44,10 @@ button:hover { border-color: var(--accent); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
 .card-header h2 { margin: 0; font-size: 18px; }
+
+.browser-header { align-items: center; flex-wrap: wrap; }
+.browser-search { min-width: 280px; width: min(100%, 340px); }
+
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
 .summary-box { padding: 12px; background: var(--card-2); border: 1px solid var(--line); border-radius: 12px; }
 .summary-box .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
@@ -192,3 +198,48 @@ button:hover { border-color: var(--accent); }
 .compare-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
 .compare-toolbar label { color: var(--muted); font-size:12px; }
 .compare-summary-grid { margin-top: 4px; }
+
+@media (max-width: 980px) {
+  .controls { width: 100%; justify-content: flex-start; }
+}
+
+
+.chart-card {
+  position: relative;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 150px;
+  max-width: min(280px, calc(100% - 20px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 29, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  opacity: 0;
+  transform: translate(-50%, calc(-100% - 12px));
+  transition: opacity 120ms ease;
+}
+
+.chart-tooltip.is-visible {
+  opacity: 1;
+}
+
+.chart-tooltip.is-below {
+  transform: translate(-50%, 12px);
+}
+
+.chart-tooltip-title {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.chart-tooltip-value {
+  font-size: 16px;
+  font-weight: 700;
+}

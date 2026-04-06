@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bank Value History Dashboard</title>
+  <title>Bank Value Tracker Dashboard</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>Bank Value History</h1>
+    <div class="topbar-title">
+      <h1>Bank Value Tracker <span id="profileTitle" class="title-profile"></span></h1>
       <p id="statusText">Loading snapshots…</p>
     </div>
     <div class="controls">
+      <button id="openDataDirBtn">Open data folder</button>
       <button id="refreshBtn">Refresh</button>
       <select id="snapshotSelect"></select>
-      <input id="itemSearch" type="search" placeholder="Search item in current view">
     </div>
   </header>
 
@@ -59,6 +59,7 @@
         <div>
           <div class="card-header browser-header">
             <h2>Bank browser</h2>
+            <input id="itemSearch" class="browser-search" type="search" placeholder="Search item in current view">
           </div>
           <div class="muted small">Browser uses explicit captured tab/layout data when available. If not, it falls back to bank order reconstruction.</div>
           <div id="bankTabButtons" class="tab-buttons"></div>
