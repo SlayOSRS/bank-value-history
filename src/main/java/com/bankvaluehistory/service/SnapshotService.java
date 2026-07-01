@@ -34,6 +34,8 @@ public class SnapshotService
 {
     private static final Logger log = LoggerFactory.getLogger(SnapshotService.class);
     private static final int PLATINUM_TOKEN_ID = 13204;
+    private static final int INVENTORY_CONTAINER_ID = 93;
+    private static final int EQUIPMENT_CONTAINER_ID = 94;
     private static final Pattern GE_PATTERN = Pattern.compile("\\(GE:\\s*([0-9,]+)\\)");
     private static final Pattern HA_PATTERN = Pattern.compile("\\(HA:\\s*([0-9,]+)\\)");
 
@@ -47,6 +49,10 @@ public class SnapshotService
 
     private boolean dirty;
     private Instant lastBankChange = Instant.EPOCH;
+    private String lastKnownProfileKey = "unknown";
+    private boolean manualCapturePending;
+    private Instant manualCaptureRequestedAt = Instant.EPOCH;
+    private String lastCaptureStatus = "";
 
     @Inject
     public SnapshotService(
@@ -81,17 +87,69 @@ public class SnapshotService
     public String getCurrentProfileKey()
     {
         Player player = client.getLocalPlayer();
-        if (player == null || player.getName() == null || player.getName().trim().isEmpty())
+        if (player != null && player.getName() != null && !player.getName().trim().isEmpty())
         {
-            return "unknown";
+            String resolved = player.getName().replaceAll("[^a-zA-Z0-9 _-]", "_").trim();
+            if (!resolved.isEmpty())
+            {
+                lastKnownProfileKey = resolved;
+                return resolved;
+            }
         }
 
-        return player.getName().replaceAll("[^a-zA-Z0-9 _-]", "_").trim();
+        return lastKnownProfileKey;
+    }
+
+    public void requestManualCapture()
+    {
+        manualCapturePending = true;
+        manualCaptureRequestedAt = Instant.now();
+        lastCaptureStatus = "Waiting for bank contents. Open your bank and enter your PIN if needed.";
+    }
+
+    public boolean isManualCapturePending()
+    {
+        return manualCapturePending;
+    }
+
+    public String getLastCaptureStatus()
+    {
+        return lastCaptureStatus;
     }
 
     public BankSnapshot captureNow()
     {
         return captureSnapshot(false);
+    }
+
+    public boolean maybeManualCapture()
+    {
+        if (!manualCapturePending)
+        {
+            return false;
+        }
+
+        BankSnapshot snapshot = captureSnapshot(false);
+        if (snapshot != null)
+        {
+            manualCapturePending = false;
+            lastCaptureStatus = "Snapshot captured. Refresh the browser if it is already open.";
+            return true;
+        }
+
+        if (Duration.between(manualCaptureRequestedAt, Instant.now()).getSeconds() > 20)
+        {
+            manualCapturePending = false;
+            lastCaptureStatus = isBankUiVisible()
+                ? "Unable to capture yet. Enter your bank PIN if prompted and wait for contents to load."
+                : "Unable to capture yet. Open your bank first, then try again.";
+            return false;
+        }
+
+        lastCaptureStatus = isBankUiVisible()
+            ? "Waiting for bank access. Enter your bank PIN if prompted and wait for contents to load."
+            : "Waiting for bank window to open.";
+        return false;
     }
 
     public boolean maybeAutoCapture()
@@ -109,6 +167,10 @@ public class SnapshotService
         String profileKey = getCurrentProfileKey();
         if ("unknown".equals(profileKey))
         {
+            if (!auto)
+            {
+                lastCaptureStatus = "Waiting for character data to load.";
+            }
             return null;
         }
 
@@ -135,6 +197,12 @@ public class SnapshotService
         ItemContainer bank = client.getItemContainer(InventoryID.BANK);
         if (bank == null)
         {
+            if (!auto)
+            {
+                lastCaptureStatus = isBankUiVisible()
+                    ? "Bank window is open but contents are not ready. Enter your PIN if prompted."
+                    : "Open your bank first.";
+            }
             return null;
         }
 
@@ -143,6 +211,7 @@ public class SnapshotService
         {
             snapshotStore.save(snapshot);
             dirty = false;
+            lastCaptureStatus = "Snapshot captured. Refresh the browser if it is already open.";
             return snapshot;
         }
         catch (IOException ex)
@@ -150,6 +219,13 @@ public class SnapshotService
             log.warn("Unable to save bank snapshot for {}", profileKey, ex);
             return null;
         }
+    }
+
+    private boolean isBankUiVisible()
+    {
+        return client.getWidget(InterfaceID.Bankmain.UNIVERSE) != null
+            || client.getWidget(InterfaceID.Bankmain.TITLE) != null
+            || client.getWidget(InterfaceID.Bankmain.ITEMS_CONTAINER) != null;
     }
 
     private BankSnapshot buildSnapshot(String profileKey, ItemContainer bank)
@@ -160,12 +236,86 @@ public class SnapshotService
         Rectangle captureBounds = resolveBankCaptureBounds();
         List<LayoutEntry> layoutEntries = readLayoutEntries(bankItemWidget, captureBounds);
 
+        PendingItemsResult bankPending = buildPendingItems(profileKey, capturedAt, bank, true);
+        PendingItemsResult inventoryPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(INVENTORY_CONTAINER_ID), false);
+        PendingItemsResult equipmentPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(EQUIPMENT_CONTAINER_ID), false);
+
+        long bankGe = bankPending.geTotal;
+        long bankHa = bankPending.haTotal;
+
+        ContainerPrices displayed = getDisplayedBankPrices();
+        if (displayed == null)
+        {
+            displayed = getWidgetContainerPrices();
+        }
+
+        if (displayed != null)
+        {
+            bankGe = Math.max(bankGe, displayed.gePrice);
+            bankHa = Math.max(bankHa, displayed.haPrice);
+        }
+
+        BankOrder bankOrder = determineBankOrder(
+            bankPending.items,
+            bankPending.items.size(),
+            getBankTabCounts(),
+            readVisibleTabItems()
+        );
+
+        List<BankTabSnapshot> tabs = buildBankTabs(bankPending.items.size(), bankOrder);
+        List<ItemSnapshot> items = assignItemsToTabs(bankPending.items, tabs, layoutEntries);
+        List<ItemSnapshot> inventoryItems = assignContainerItems(inventoryPending.items, -1, "Inventory");
+        List<ItemSnapshot> equipmentItems = assignContainerItems(equipmentPending.items, -2, "Worn equipment");
+
+        BankImageRenderer.CaptureResult capture = bankImageRenderer.capture(profileKey, capturedAt, captureBounds);
+
+        long combinedGe = bankGe + inventoryPending.geTotal + equipmentPending.geTotal;
+        long combinedHa = bankHa + inventoryPending.haTotal + equipmentPending.haTotal;
+
+        return new BankSnapshot(
+            profileKey,
+            LocalDate.now(),
+            capturedAt,
+            bankGe,
+            bankHa,
+            bankGe,
+            bankHa,
+            inventoryPending.geTotal,
+            inventoryPending.haTotal,
+            equipmentPending.geTotal,
+            equipmentPending.haTotal,
+            combinedGe,
+            combinedHa,
+            capture.getPath(),
+            capture.getWidth(),
+            capture.getHeight(),
+            tabs,
+            items,
+            inventoryItems,
+            equipmentItems
+        );
+    }
+
+    private PendingItemsResult buildPendingItems(String profileKey, Instant capturedAt, ItemContainer container, boolean includePlaceholders)
+    {
         List<PendingItem> pending = new ArrayList<>();
         long totalGe = 0L;
         long totalHa = 0L;
 
-        for (Item item : bank.getItems())
+        if (container == null)
         {
+            return new PendingItemsResult(pending, totalGe, totalHa);
+        }
+
+        Item[] containerItems = container.getItems();
+        if (containerItems == null)
+        {
+            return new PendingItemsResult(pending, totalGe, totalHa);
+        }
+
+        for (int slot = 0; slot < containerItems.length; slot++)
+        {
+            Item item = containerItems[slot];
             if (item == null)
             {
                 continue;
@@ -178,7 +328,12 @@ public class SnapshotService
             }
 
             int quantity = Math.max(0, item.getQuantity());
-            boolean placeholder = quantity == 0;
+            boolean placeholder = includePlaceholders && quantity == 0;
+            if (!includePlaceholders && quantity <= 0)
+            {
+                continue;
+            }
+
             int canonicalItemId = itemManager.canonicalize(itemId);
             String name = itemManager.getItemComposition(itemId).getName();
 
@@ -195,9 +350,17 @@ public class SnapshotService
                 haTotal = (long) haUnit * quantity;
             }
 
+            String iconPath = "/icons/" + canonicalItemId + ".png";
             if (config.exportIcons())
             {
-                iconExportService.exportIconIfMissing(canonicalItemId, Math.max(1, quantity));
+                iconPath = iconExportService.exportSnapshotIcon(
+                    profileKey,
+                    capturedAt,
+                    itemId,
+                    canonicalItemId,
+                    quantity,
+                    placeholder
+                );
             }
 
             pending.add(new PendingItem(
@@ -209,53 +372,44 @@ public class SnapshotService
                 geTotal,
                 haUnit,
                 haTotal,
-                "/icons/" + canonicalItemId + ".png",
-                placeholder
+                iconPath,
+                placeholder,
+                slot
             ));
 
             totalGe += geTotal;
             totalHa += haTotal;
         }
 
-        if (client.getVarbitValue(VarbitID.BANK_CURRENTTAB) == 0)
+        return new PendingItemsResult(pending, totalGe, totalHa);
+    }
+
+    private List<ItemSnapshot> assignContainerItems(List<PendingItem> pending, int tabIndex, String tabName)
+    {
+        List<ItemSnapshot> items = new ArrayList<>(pending.size());
+        for (PendingItem item : pending)
         {
-            ContainerPrices displayed = getDisplayedBankPrices();
-            if (displayed == null)
-            {
-                displayed = getWidgetContainerPrices();
-            }
-
-            if (displayed != null)
-            {
-                totalGe = displayed.gePrice;
-                totalHa = displayed.haPrice;
-            }
+            items.add(new ItemSnapshot(
+                item.itemId,
+                item.canonicalItemId,
+                item.name,
+                item.quantity,
+                item.geUnitPrice,
+                item.geTotal,
+                item.haUnitPrice,
+                item.haTotal,
+                item.sourceSlotIndex,
+                tabIndex,
+                tabName,
+                item.iconPath,
+                item.placeholder,
+                -1,
+                -1,
+                0,
+                0
+            ));
         }
-
-        BankOrder bankOrder = determineBankOrder(
-            pending,
-            pending.size(),
-            getBankTabCounts(),
-            readVisibleTabItems()
-        );
-
-        List<BankTabSnapshot> tabs = buildBankTabs(pending.size(), bankOrder);
-        List<ItemSnapshot> items = assignItemsToTabs(pending, tabs, layoutEntries);
-
-        BankImageRenderer.CaptureResult capture = bankImageRenderer.capture(profileKey, capturedAt, captureBounds);
-
-        return new BankSnapshot(
-            profileKey,
-            LocalDate.now(),
-            capturedAt,
-            totalGe,
-            totalHa,
-            capture.getPath(),
-            capture.getWidth(),
-            capture.getHeight(),
-            tabs,
-            items
-        );
+        return items;
     }
 
     private Rectangle resolveBankCaptureBounds()
@@ -746,6 +900,7 @@ public class SnapshotService
         private final long geTotal;
         private final long haTotal;
         private final boolean placeholder;
+        private final int sourceSlotIndex;
 
         private PendingItem(
             int itemId,
@@ -757,7 +912,8 @@ public class SnapshotService
             int haUnitPrice,
             long haTotal,
             String iconPath,
-            boolean placeholder)
+            boolean placeholder,
+            int sourceSlotIndex)
         {
             this.itemId = itemId;
             this.canonicalItemId = canonicalItemId;
@@ -769,6 +925,21 @@ public class SnapshotService
             this.haTotal = haTotal;
             this.iconPath = iconPath;
             this.placeholder = placeholder;
+            this.sourceSlotIndex = sourceSlotIndex;
+        }
+    }
+
+    private static class PendingItemsResult
+    {
+        private final List<PendingItem> items;
+        private final long geTotal;
+        private final long haTotal;
+
+        private PendingItemsResult(List<PendingItem> items, long geTotal, long haTotal)
+        {
+            this.items = items;
+            this.geTotal = geTotal;
+            this.haTotal = haTotal;
         }
     }
 

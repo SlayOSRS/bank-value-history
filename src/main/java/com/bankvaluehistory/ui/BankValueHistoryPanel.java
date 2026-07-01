@@ -20,6 +20,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.ColorScheme;
@@ -75,9 +76,11 @@ public class BankValueHistoryPanel extends PluginPanel
         JLabel titleLabel = new JLabel(title);
         titleLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 16f));
+        titleLabel.setToolTipText(title);
 
         JLabel subtitleLabel = new JLabel("<html><div style='width:250px'>" + escape(subtitle) + "</div></html>");
         subtitleLabel.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
+        subtitleLabel.setToolTipText(subtitle);
 
         panel.add(titleLabel);
         panel.add(Box.createRigidArea(new Dimension(0, 4)));
@@ -88,10 +91,15 @@ public class BankValueHistoryPanel extends PluginPanel
     private JPanel actionsSection()
     {
         JPanel panel = card();
-        panel.add(sectionLabel("Actions"));
+
+        JLabel actionsLabel = sectionLabel("Actions");
+        actionsLabel.setAlignmentX(CENTER_ALIGNMENT);
+        actionsLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        panel.add(actionsLabel);
+
         panel.add(Box.createRigidArea(new Dimension(0, 6)));
 
-        JPanel grid = new JPanel(new GridLayout(4, 1, 0, 4));
+        JPanel grid = new JPanel(new GridLayout(5, 1, 0, 4));
         grid.setOpaque(false);
 
         JButton capture = button("Capture snapshot");
@@ -100,7 +108,7 @@ public class BankValueHistoryPanel extends PluginPanel
         JButton open = button("Open dashboard");
         open.addActionListener(e -> {
             dashboardServer.ensureStarted();
-            dashboardServer.openBrowser();
+            dashboardServer.openBrowser(snapshotService.getCurrentProfileKey());
             refreshStatus();
         });
 
@@ -110,12 +118,20 @@ public class BankValueHistoryPanel extends PluginPanel
             refreshStatus();
         });
 
+        JButton stop = button("Stop dashboard");
+        stop.addActionListener(e -> {
+            dashboardServer.stop();
+            setHint("Dashboard stopped.");
+            refreshStatus();
+        });
+
         JButton folder = button("Open data folder");
         folder.addActionListener(e -> openDataFolder());
 
         grid.add(capture);
         grid.add(open);
         grid.add(restart);
+        grid.add(stop);
         grid.add(folder);
         panel.add(grid);
         return panel;
@@ -124,19 +140,23 @@ public class BankValueHistoryPanel extends PluginPanel
     private JPanel statusSection()
     {
         JPanel panel = card();
-        panel.add(sectionLabel("Status"));
-        panel.add(Box.createRigidArea(new Dimension(0, 6)));
-        panel.add(infoRow("State", statusValue));
-        panel.add(Box.createRigidArea(new Dimension(0, 4)));
-        panel.add(infoRow("Profile", profileValue));
-        panel.add(Box.createRigidArea(new Dimension(0, 4)));
-        panel.add(infoRow("Dashboard", dashboardValue));
-        panel.add(Box.createRigidArea(new Dimension(0, 4)));
-        panel.add(infoRow("Data path", dataValue));
-        panel.add(Box.createRigidArea(new Dimension(0, 6)));
-        hintValue.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
-        panel.add(hintValue);
-        return panel;
+
+        JLabel statusLabel = sectionLabel("Status");
+		statusLabel.setBorder(BorderFactory.createEmptyBorder(0, 20, 0, 0));
+		panel.add(statusLabel);
+
+		panel.add(Box.createRigidArea(new Dimension(0, 6)));
+		panel.add(infoRow("State", statusValue));
+		panel.add(Box.createRigidArea(new Dimension(0, 4)));
+		panel.add(infoRow("Profile", profileValue));
+		panel.add(Box.createRigidArea(new Dimension(0, 4)));
+		panel.add(infoRow("Dashboard", dashboardValue));
+		panel.add(Box.createRigidArea(new Dimension(0, 4)));
+		panel.add(infoRow("Data path", dataValue));
+		panel.add(Box.createRigidArea(new Dimension(0, 6)));
+		hintValue.setForeground(ColorScheme.MEDIUM_GRAY_COLOR);
+		panel.add(hintValue);
+		return panel;
     }
 
     private JPanel settingsSection()
@@ -160,13 +180,13 @@ public class BankValueHistoryPanel extends PluginPanel
                     if (config.openDashboardAfterCapture())
                     {
                         dashboardServer.ensureStarted();
-                        dashboardServer.openBrowser();
+                        dashboardServer.openBrowser(snapshotService.getCurrentProfileKey());
                     }
                     setHint("Snapshot captured. Refresh the browser if it is already open.");
                 }
                 else
                 {
-                    setHint("Open your bank first, then capture again.");
+                    setHint("Open your bank first, and if a bank PIN is shown, enter it before capturing.");
                 }
                 refreshStatus();
             });
@@ -182,17 +202,26 @@ public class BankValueHistoryPanel extends PluginPanel
 
             statusValue.setText(valueHtml(running ? "Running" : "Stopped"));
             statusValue.setForeground(running ? ColorScheme.PROGRESS_COMPLETE_COLOR : ColorScheme.PROGRESS_ERROR_COLOR);
+            statusValue.setToolTipText(running ? "Dashboard is currently running." : "Dashboard is currently stopped.");
+
             profileValue.setText(valueHtml(profile));
+            profileValue.setToolTipText(profile);
+
             dashboardValue.setText(valueHtml((running ? "Live" : "Offline") + " • " + dashboardServer.getBaseUrl()));
-            dataValue.setText(valueHtml(baseDir.toString()));
+            dashboardValue.setToolTipText(dashboardServer.getBaseUrl());
+
+            String fullPath = baseDir.toString();
+            dataValue.setText(valueHtml(shortenMiddle(fullPath, 26)));
+            dataValue.setToolTipText(fullPath);
+
             settingsValue.setText("<html><div style='width:250px'>"
-                + bullet("Auto capture", yesNo(config.autoCapture()) + " after " + config.captureHour() + ":00")
-                + bullet("Open dashboard after capture", yesNo(config.openDashboardAfterCapture()))
-                + bullet("Auto-start dashboard", yesNo(config.autoStartDashboard()))
-                + bullet("Open dashboard on startup", yesNo(config.openDashboardOnStartup()))
+                + bullet("Auto capture", shortYesNo(config.autoCapture()) + " after " + config.captureHour() + ":00")
+                + bullet("Open after capture", shortYesNo(config.openDashboardAfterCapture()))
+                + bullet("Auto-start web", shortYesNo(config.autoStartDashboard()))
+                + bullet("Open on startup", shortYesNo(config.openDashboardOnStartup()))
                 + bullet("Port", Integer.toString(config.webPort()))
-                + bullet("Export icons", yesNo(config.exportIcons()))
-                + bullet("Ignore zero-value items", yesNo(config.ignoreZeroValueItems()))
+                + bullet("Export icons", shortYesNo(config.exportIcons()))
+                + bullet("Ignore zero-value", shortYesNo(config.ignoreZeroValueItems()))
                 + "</div></html>");
 
             if (hintValue.getText() == null || hintValue.getText().trim().isEmpty())
@@ -282,6 +311,7 @@ public class BankValueHistoryPanel extends PluginPanel
     private void setHint(String text)
     {
         hintValue.setText("<html><div style='width:250px'>" + escape(text) + "</div></html>");
+        hintValue.setToolTipText(text);
     }
 
     private String valueHtml(String text)
@@ -294,9 +324,22 @@ public class BankValueHistoryPanel extends PluginPanel
         return "&#8226; <b>" + escape(key) + ":</b> " + escape(value) + "<br/>";
     }
 
-    private String yesNo(boolean value)
+    private String shortYesNo(boolean value)
     {
-        return value ? "Enabled" : "Disabled";
+        return value ? "On" : "Off";
+    }
+
+    private String shortenMiddle(String value, int maxLen)
+    {
+        if (value == null || value.length() <= maxLen)
+        {
+            return value == null ? "" : value;
+        }
+
+        int keep = Math.max(6, (maxLen - 3) / 2);
+        String start = value.substring(0, keep);
+        String end = value.substring(value.length() - keep);
+        return start + "..." + end;
     }
 
     private String escape(String value)
