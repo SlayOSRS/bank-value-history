@@ -1,16 +1,17 @@
 package com.bankvaluehistory.service;
 
-import java.awt.AWTException;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Graphics2D;
-import java.awt.IllegalComponentStateException;
-import java.awt.Point;
 import java.awt.Rectangle;
-import java.awt.Robot;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.Optional;
+import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -38,8 +39,19 @@ public class BankImageRenderer
         try
         {
             snapshotStore.ensureDirectories(profileKey);
-            Path file = snapshotStore.getSnapshotImageFile(profileKey, capturedAt);
             BufferedImage image = createCapture(captureBounds);
+
+            Path reusable = findReusableImage(profileKey, image).orElse(null);
+            if (reusable != null)
+            {
+                return new CaptureResult(
+                    "/data/" + profileKey + "/images/" + reusable.getFileName().toString(),
+                    image.getWidth(),
+                    image.getHeight()
+                );
+            }
+
+            Path file = snapshotStore.getSnapshotImageFile(profileKey, capturedAt);
             ImageIO.write(image, "png", file.toFile());
             return new CaptureResult(
                 "/data/" + profileKey + "/images/" + file.getFileName().toString(),
@@ -47,36 +59,166 @@ public class BankImageRenderer
                 image.getHeight()
             );
         }
-        catch (IOException | AWTException | IllegalComponentStateException ex)
+        catch (IOException | RuntimeException ex)
         {
             log.warn("Unable to capture bank image for {}", profileKey, ex);
             return new CaptureResult(null, 0, 0);
         }
     }
 
-    private BufferedImage createCapture(Rectangle captureBounds) throws AWTException
+    private Optional<Path> findReusableImage(String profileKey, BufferedImage currentImage)
     {
-        if (captureBounds == null || captureBounds.width <= 0 || captureBounds.height <= 0)
+        Path imagesDir = snapshotStore.getImagesDir(profileKey);
+        if (!Files.isDirectory(imagesDir))
+        {
+            return Optional.empty();
+        }
+
+        try (Stream<Path> stream = Files.list(imagesDir))
+        {
+            Path latest = stream
+                .filter(this::isPngFile)
+                .max(Comparator.comparingLong(this::lastModifiedSafe))
+                .orElse(null);
+
+            if (latest == null)
+            {
+                return Optional.empty();
+            }
+
+            BufferedImage existing = ImageIO.read(latest.toFile());
+            if (existing == null)
+            {
+                return Optional.empty();
+            }
+
+            return imagesEqual(existing, currentImage) ? Optional.of(latest) : Optional.empty();
+        }
+        catch (IOException ex)
+        {
+            log.debug("Unable to inspect previous bank image for {}", profileKey, ex);
+            return Optional.empty();
+        }
+    }
+
+    private boolean isPngFile(Path path)
+    {
+        String name = path.getFileName().toString().toLowerCase();
+        return name.endsWith(".png");
+    }
+
+    private long lastModifiedSafe(Path path)
+    {
+        try
+        {
+            return Files.getLastModifiedTime(path).toMillis();
+        }
+        catch (IOException ex)
+        {
+            return 0L;
+        }
+    }
+
+    private boolean imagesEqual(BufferedImage a, BufferedImage b)
+    {
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        if (a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight())
+        {
+            return false;
+        }
+
+        for (int y = 0; y < a.getHeight(); y++)
+        {
+            for (int x = 0; x < a.getWidth(); x++)
+            {
+                if (a.getRGB(x, y) != b.getRGB(x, y))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private BufferedImage createCapture(Rectangle captureBounds)
+    {
+        Component canvas = client.getCanvas();
+        if (canvas == null || canvas.getWidth() <= 0 || canvas.getHeight() <= 0)
         {
             return blankImage(720, 520);
         }
 
-        Point canvasLocation = client.getCanvas().getLocationOnScreen();
-        Rectangle screenRect = new Rectangle(
-            canvasLocation.x + captureBounds.x,
-            canvasLocation.y + captureBounds.y,
-            captureBounds.width,
-            captureBounds.height
+        BufferedImage canvasImage = new BufferedImage(
+            Math.max(1, canvas.getWidth()),
+            Math.max(1, canvas.getHeight()),
+            BufferedImage.TYPE_INT_ARGB
         );
 
+        Graphics2D g = canvasImage.createGraphics();
         try
         {
-            return new Robot().createScreenCapture(screenRect);
+            canvas.printAll(g);
         }
-        catch (SecurityException ex)
+        finally
         {
-            return blankImage(captureBounds.width, captureBounds.height);
+            g.dispose();
         }
+
+        Rectangle crop = resolveCropBounds(captureBounds, canvasImage.getWidth(), canvasImage.getHeight());
+        if (crop == null)
+        {
+            return canvasImage;
+        }
+
+        return copyRegion(canvasImage, crop);
+    }
+
+    private Rectangle resolveCropBounds(Rectangle captureBounds, int canvasWidth, int canvasHeight)
+    {
+        if (captureBounds == null || captureBounds.width <= 0 || captureBounds.height <= 0)
+        {
+            return new Rectangle(0, 0, Math.max(1, canvasWidth), Math.max(1, canvasHeight));
+        }
+
+        Rectangle canvasBounds = new Rectangle(0, 0, Math.max(1, canvasWidth), Math.max(1, canvasHeight));
+        Rectangle crop = captureBounds.intersection(canvasBounds);
+        if (crop.width <= 0 || crop.height <= 0)
+        {
+            return new Rectangle(0, 0, Math.max(1, canvasWidth), Math.max(1, canvasHeight));
+        }
+
+        return crop;
+    }
+
+    private BufferedImage copyRegion(BufferedImage source, Rectangle region)
+    {
+        BufferedImage copy = new BufferedImage(region.width, region.height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = copy.createGraphics();
+        try
+        {
+            g.drawImage(
+                source,
+                0,
+                0,
+                region.width,
+                region.height,
+                region.x,
+                region.y,
+                region.x + region.width,
+                region.y + region.height,
+                null
+            );
+        }
+        finally
+        {
+            g.dispose();
+        }
+        return copy;
     }
 
     private BufferedImage blankImage(int width, int height)
