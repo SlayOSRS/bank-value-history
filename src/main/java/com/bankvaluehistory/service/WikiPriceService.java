@@ -69,7 +69,7 @@ public class WikiPriceService
     {
         if (executor != null)
         {
-            executor.shutdownNow();
+            executor.shutdown();
             executor = null;
         }
     }
@@ -150,10 +150,6 @@ public class WikiPriceService
         catch (IOException | InterruptedException ex)
         {
             log.debug("Unable to fetch wiki timeseries for {} {}", itemId, normalized, ex);
-            if (ex instanceof InterruptedException)
-            {
-                Thread.currentThread().interrupt();
-            }
         }
 
         return "{\"data\":[]}";
@@ -198,10 +194,6 @@ public class WikiPriceService
         catch (IOException | InterruptedException ex)
         {
             log.debug("Unable to fetch wiki mapping", ex);
-            if (ex instanceof InterruptedException)
-            {
-                Thread.currentThread().interrupt();
-            }
         }
 
         return cached != null ? cached.body : "[]";
@@ -245,10 +237,6 @@ public class WikiPriceService
         catch (IOException | InterruptedException ex)
         {
             log.debug("Unable to refresh live wiki prices", ex);
-            if (ex instanceof InterruptedException)
-            {
-                Thread.currentThread().interrupt();
-            }
         }
         finally
         {
