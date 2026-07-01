@@ -3,26 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bank Value Tracker Dashboard</title>
+  <title>Bank Value History Dashboard</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-title">
-      <h1>Bank Value Tracker <span id="profileTitle" class="title-profile"></span></h1>
+      <h1>Bank Value History <span id="profileTitle" class="title-profile"></span></h1>
       <p id="statusText">Loading snapshots…</p>
     </div>
-    <div class="controls">
+    <div class="topbar-actions">
       <button id="openDataDirBtn">Open data folder</button>
       <button id="refreshBtn">Refresh</button>
-      <select id="snapshotSelect"></select>
+      <button id="deleteSnapshotBtn" class="danger-button" title="Delete selected snapshot">Delete snapshot</button>
+      <label class="sr-only" for="snapshotSelect">Snapshot</label>
+      <select id="snapshotSelect" title="Select snapshot"></select>
     </div>
   </header>
 
+  <section class="profile-subbar">
+    <div class="profile-switcher-wrap">
+      <label class="sr-only" for="profileSelect">Character</label>
+      <select id="profileSelect" title="Switch character"></select>
+    </div>
+  </section>
+
   <nav class="section-nav">
-    <button data-section="overview" class="nav-btn is-active">Overview</button>
-    <button data-section="browser" class="nav-btn">Bank Browser</button>
-    <button data-section="market" class="nav-btn">Market</button>
+    <div class="section-nav-left">
+      <button data-section="overview" class="nav-btn is-active">Overview</button>
+      <button data-section="browser" class="nav-btn">Bank Browser</button>
+      <button data-section="loadout" class="nav-btn">Inventory &amp; Worn</button>
+      <button data-section="market" class="nav-btn">Market</button>
+    </div>
+    <div class="section-nav-right">
+      <div class="delta-wrap">
+        <label class="sr-only" for="dynamicDeltaSelect">Delta range</label>
+        <select id="dynamicDeltaSelect" title="Select delta range">
+          <option value="auto">Auto delta</option>
+          <option value="1">Delta vs 1 day</option>
+          <option value="7">Delta vs 1 week</option>
+          <option value="14">Delta vs 2 weeks</option>
+          <option value="30">Delta vs 1 month</option>
+          <option value="90">Delta vs 3 months</option>
+          <option value="180">Delta vs 6 months</option>
+          <option value="365">Delta vs 1 year</option>
+          <option value="first">Delta vs first snapshot</option>
+        </select>
+      </div>
+    </div>
   </nav>
 
   <main class="layout">
@@ -42,14 +70,18 @@
         </div>
         <div id="compareSummaryGrid" class="summary-grid compare-summary-grid"></div>
       </section>
-      <section class="card two-column">
+      <section class="card two-column compare-movers-card">
         <div>
-          <div class="card-header"><h2>Top rises for selected compare pair</h2></div>
-          <table class="compact-table" id="gainersTable"></table>
+          <div class="card-header"><h2>Top 20 rises for selected compare pair</h2></div>
+          <div class="mover-table-wrap">
+            <table class="compact-table" id="gainersTable"></table>
+          </div>
         </div>
         <div>
-          <div class="card-header"><h2>Top drops for selected compare pair</h2></div>
-          <table class="compact-table" id="losersTable"></table>
+          <div class="card-header"><h2>Top 20 drops for selected compare pair</h2></div>
+          <div class="mover-table-wrap">
+            <table class="compact-table" id="losersTable"></table>
+          </div>
         </div>
       </section>
     </section>
@@ -71,8 +103,39 @@
         </div>
       </section>
       <section class="card">
-        <div class="card-header"><h2>Items in current view</h2></div>
-        <table class="holdings-table" id="holdingsTable"></table>
+        <div class="card-header holdings-header">
+          <h2>Items in current view</h2>
+          <div id="currentViewMeta" class="muted small"></div>
+        </div>
+        <div class="holdings-wrap">
+          <table class="holdings-table" id="holdingsTable"></table>
+        </div>
+      </section>
+    </section>
+
+    <section id="section-loadout" class="page-section">
+      <section class="card summary-grid" id="loadoutSummaryGrid"></section>
+      <section class="card two-column loadout-visuals-card">
+        <div>
+          <div class="card-header"><h2>Worn equipment in snapshot</h2></div>
+          <div class="muted small loadout-help">Visual layout of currently worn gear. Empty slots are shown as placeholders.</div>
+          <div id="equipmentVisual" class="equipment-visual"></div>
+        </div>
+        <div>
+          <div class="card-header"><h2>Inventory in snapshot</h2></div>
+          <div class="muted small loadout-help">Visual layout of the 28 inventory slots for the selected snapshot.</div>
+          <div id="inventoryVisual" class="inventory-visual"></div>
+        </div>
+      </section>
+      <section class="card two-column">
+        <div>
+          <div class="card-header"><h2>Inventory item details</h2></div>
+          <table class="compact-table" id="inventoryTable"></table>
+        </div>
+        <div>
+          <div class="card-header"><h2>Worn equipment item details</h2></div>
+          <table class="compact-table" id="equipmentTable"></table>
+        </div>
       </section>
     </section>
 

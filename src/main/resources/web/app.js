@@ -1,5 +1,6 @@
 const state = {
   status: null,
+  csrfToken: '',
   snapshots: [],
   snapshotDetails: {},
   itemHistoryCache: {},
@@ -15,6 +16,9 @@ const state = {
   activeWikiRange: '1d',
   activeTabIndex: 'all',
   activeSection: 'overview',
+  activeProfile: '',
+  profiles: [],
+  dynamicDeltaMode: 'auto',
   requestToken: 0,
   itemHistoryRequestToken: 0
 };
@@ -24,9 +28,18 @@ const els = {
   profileTitle: document.getElementById('profileTitle'),
   openDataDirBtn: document.getElementById('openDataDirBtn'),
   refreshBtn: document.getElementById('refreshBtn'),
+  deleteSnapshotBtn: document.getElementById('deleteSnapshotBtn'),
+  profileSelect: document.getElementById('profileSelect'),
   snapshotSelect: document.getElementById('snapshotSelect'),
+  dynamicDeltaSelect: document.getElementById('dynamicDeltaSelect'),
   itemSearch: document.getElementById('itemSearch'),
+  currentViewMeta: document.getElementById('currentViewMeta'),
   summaryGrid: document.getElementById('summaryGrid'),
+  loadoutSummaryGrid: document.getElementById('loadoutSummaryGrid'),
+  inventoryVisual: document.getElementById('inventoryVisual'),
+  equipmentVisual: document.getElementById('equipmentVisual'),
+  inventoryTable: document.getElementById('inventoryTable'),
+  equipmentTable: document.getElementById('equipmentTable'),
   browserItemDetails: document.getElementById('browserItemDetails'),
   bankTabButtons: document.getElementById('bankTabButtons'),
   bankRecreation: document.getElementById('bankRecreation'),
@@ -145,26 +158,83 @@ function normalizeWikiName(name) {
 
 function looseWikiName(name) {
   return normalizeWikiName(name)
-    .replace(/\s*\((?:uncharged|charged|broken|inactive|active|or|nz|l|d|full|light|dark|normal|echoes)\)\s*/g, ' ')
+    .replace(/\s*\((?:uncharged|charged|empty|broken|inactive|active|degraded|new|used|full|light|dark|normal|uncharged|or|nz|l|d|e|i|u|c|echoes|attuned|corrupted)\)\s*/g, ' ')
     .replace(/\s*\(\d+\)\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function safeAssetPath(path, fallback = '') {
-  const value = String(path || '');
-  if (/^\/icons\/[A-Za-z0-9._-]+\.png(?:\?.*)?$/.test(value)) return value;
-  if (/^\/data\/[A-Za-z0-9 _-]+\/images\/[A-Za-z0-9._-]+\.(?:png|jpg|jpeg|webp)(?:\?.*)?$/.test(value)) return value;
-  return fallback;
+  const value = String(path || '').trim();
+  if (!value || (!value.startsWith('/icons/') && !value.startsWith('/data/'))) {
+    return fallback;
+  }
+  if (value.includes('\\') || value.includes('//')) {
+    return fallback;
+  }
+
+  let decoded;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch (_) {
+    return fallback;
+  }
+
+  if (decoded.includes('..') || decoded.includes('\\') || decoded.includes('//')) {
+    return fallback;
+  }
+
+  const noQuery = decoded.split('?')[0].toLowerCase();
+  if (!/\.(png|jpg|jpeg|webp)$/.test(noQuery)) {
+    return fallback;
+  }
+
+  return value;
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, { cache: 'no-store', ...options });
+  const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin', redirect: 'error', ...options });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Request failed (${response.status})`);
   }
   return response.json();
+}
+
+function stateChangingHeaders(extra = {}) {
+  return {
+    ...extra,
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-BVH-CSRF': state.csrfToken || ''
+  };
+}
+
+async function setServerActiveProfile(profile) {
+  const value = String(profile || '').trim();
+  if (!value) return null;
+  return fetchJson('/api/active-profile', {
+    method: 'POST',
+    headers: stateChangingHeaders({
+      'Content-Type': 'application/json'
+    }),
+    body: JSON.stringify({ profile: value })
+  });
+}
+
+function apiUrl(path, params = {}) {
+  const url = new URL(path, window.location.origin);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    url.searchParams.set(key, value);
+  });
+  return `${url.pathname}${url.search}`;
+}
+
+function addAssetVersion(path, version) {
+  const safe = safeAssetPath(path, '');
+  if (!safe) return '';
+  const separator = safe.includes('?') ? '&' : '?';
+  return `${safe}${separator}v=${encodeURIComponent(String(version || '0'))}`;
 }
 
 function snapshotHasDetails(snapshot) {
@@ -182,7 +252,7 @@ async function ensureSnapshotLoaded(index) {
     state.snapshots[index] = state.snapshotDetails[key];
     return state.snapshotDetails[key];
   }
-  const detail = await fetchJson(`/api/snapshot?capturedAt=${encodeURIComponent(key)}`);
+  const detail = await fetchJson(apiUrl('/api/snapshot', { capturedAt: key }));
   state.snapshotDetails[key] = detail;
   state.snapshots[index] = detail;
   return detail;
@@ -196,26 +266,160 @@ async function ensureSnapshotsLoaded(indexes) {
   return map;
 }
 
+function buildLocalItemHistory(itemId) {
+  const id = Number(itemId || 0);
+  if (!id) return [];
+  return state.snapshots.map(snapshot => {
+    const match = decorateItems(snapshot).find(entry => Number(entry.canonicalItemId) === id && !entry.placeholder);
+    return {
+      capturedAt: snapshot.capturedAt,
+      geTotal: Number(match?.geTotal || 0),
+      quantity: Number(match?.quantity || 0),
+      tabName: match?.effectiveTabName || match?.tabName || 'Main',
+      present: Boolean(match)
+    };
+  });
+}
+
 async function loadItemHistory(itemId) {
   const key = String(itemId || '');
   if (!key) return [];
-  if (state.itemHistoryCache[key]) return state.itemHistoryCache[key];
-  if (state.itemHistoryPending[key]) return state.itemHistoryPending[key];
-  state.itemHistoryPending[key] = fetchJson(`/api/item-history?canonicalId=${encodeURIComponent(itemId)}`)
-    .then(history => {
-      state.itemHistoryCache[key] = Array.isArray(history) ? history : [];
-      delete state.itemHistoryPending[key];
-      return state.itemHistoryCache[key];
-    })
-    .catch(error => {
-      delete state.itemHistoryPending[key];
-      throw error;
-    });
-  return state.itemHistoryPending[key];
+  if (!state.itemHistoryCache[key]) {
+    state.itemHistoryCache[key] = buildLocalItemHistory(itemId);
+  }
+  return state.itemHistoryCache[key];
 }
 
 function currentSnapshot() {
   return state.snapshots[state.selectedIndex] || null;
+}
+
+function snapshotBankGe(snapshot) {
+  return Number(snapshot?.bankGe ?? snapshot?.totalGe ?? 0);
+}
+
+function snapshotBankHa(snapshot) {
+  return Number(snapshot?.bankHa ?? snapshot?.totalHa ?? 0);
+}
+
+function snapshotInventoryGe(snapshot) {
+  return Number(snapshot?.inventoryGe ?? sumItemGe(snapshotInventoryItems(snapshot)));
+}
+
+function snapshotInventoryHa(snapshot) {
+  return Number(snapshot?.inventoryHa ?? sumItemHa(snapshotInventoryItems(snapshot)));
+}
+
+function snapshotEquipmentGe(snapshot) {
+  return Number(snapshot?.equipmentGe ?? sumItemGe(snapshotEquipmentItems(snapshot)));
+}
+
+function snapshotEquipmentHa(snapshot) {
+  return Number(snapshot?.equipmentHa ?? sumItemHa(snapshotEquipmentItems(snapshot)));
+}
+
+function snapshotCombinedGe(snapshot) {
+  return Number(snapshot?.combinedGe ?? (snapshotBankGe(snapshot) + snapshotInventoryGe(snapshot) + snapshotEquipmentGe(snapshot)));
+}
+
+function snapshotCombinedHa(snapshot) {
+  return Number(snapshot?.combinedHa ?? (snapshotBankHa(snapshot) + snapshotInventoryHa(snapshot) + snapshotEquipmentHa(snapshot)));
+}
+
+function normalizeSourceItems(items, sourceName) {
+  return (Array.isArray(items) ? items : []).map(item => ({
+    ...item,
+    iconPath: safeAssetPath(item.iconPath, `/icons/${item.canonicalItemId}.png`),
+    effectiveTabIndex: item.tabIndex,
+    effectiveTabName: item.tabName || sourceName
+  }));
+}
+
+function snapshotInventoryItems(snapshot) {
+  return normalizeSourceItems(snapshot?.inventoryItems, 'Inventory');
+}
+
+function snapshotEquipmentItems(snapshot) {
+  return normalizeSourceItems(snapshot?.equipmentItems, 'Worn equipment');
+}
+
+
+const EQUIPMENT_SLOT_LAYOUT = [
+  { key: 'head', label: 'Head', indexes: [0] },
+  { key: 'cape', label: 'Cape', indexes: [1] },
+  { key: 'neck', label: 'Neck', indexes: [2] },
+  { key: 'ammo', label: 'Ammo', indexes: [13] },
+  { key: 'weapon', label: 'Weapon', indexes: [3] },
+  { key: 'body', label: 'Body', indexes: [4] },
+  { key: 'shield', label: 'Shield', indexes: [5] },
+  { key: 'legs', label: 'Legs', indexes: [7, 6] },
+  { key: 'hands', label: 'Hands', indexes: [9, 8] },
+  { key: 'feet', label: 'Feet', indexes: [10, 11] },
+  { key: 'ring', label: 'Ring', indexes: [12] }
+];
+
+function isFutureAmmoSlot(slotIndex) {
+  const numeric = Number(slotIndex);
+  return Number.isInteger(numeric) && numeric >= 13;
+}
+
+function equipmentSlotLabel(slotIndex) {
+  const numeric = Number(slotIndex);
+  const found = EQUIPMENT_SLOT_LAYOUT.find(slot => slot.indexes.includes(numeric));
+  if (found) return found.label;
+  if (isFutureAmmoSlot(numeric)) return `Ammo ${formatNumber(numeric - 12)}`;
+  return `Slot ${formatNumber(numeric + 1)}`;
+}
+
+function equipmentSlotMatchesItem(slot, item) {
+  const numeric = Number(item?.slotIndex);
+  return slot.indexes.includes(numeric) || (slot.key === 'ammo' && isFutureAmmoSlot(numeric));
+}
+
+function buildEquipmentVisualState(items) {
+  const rows = (items || []).filter(item => !item.placeholder).slice().sort((a, b) => Number(a.slotIndex || 0) - Number(b.slotIndex || 0));
+  const used = new Set();
+  const slots = EQUIPMENT_SLOT_LAYOUT.map(slot => {
+    const matches = rows.filter(item => !used.has(item) && equipmentSlotMatchesItem(slot, item));
+    matches.forEach(item => used.add(item));
+    return { ...slot, items: matches };
+  });
+  const extras = rows.filter(item => !used.has(item));
+  return { slots, extras };
+}
+
+function loadoutItemMarkup(item, emptyLabel, extraClasses = '') {
+  if (!item) {
+    return `
+      <div class="loadout-slot-card is-empty ${extraClasses}">
+        <span class="loadout-slot-empty">${escapeHtml(emptyLabel)}</span>
+      </div>`;
+  }
+  const qty = Number(item.quantity || 0);
+  const qtyMarkup = qty > 1 ? `<span class="loadout-slot-qty">${escapeHtml(formatCompactNumber(qty))}</span>` : '';
+  return `
+    <button type="button" class="loadout-slot-card ${extraClasses}" data-item-id="${item.canonicalItemId}" title="${escapeHtml(item.name)} • Qty ${formatNumber(qty)} • GE ${formatGp(item.geTotal)} • HA ${formatGp(item.haTotal)} • ${escapeHtml(equipmentSlotLabel(item.slotIndex))}">
+      <img loading="lazy" src="${item.iconPath}" alt="${escapeHtml(item.name)}">
+      ${qtyMarkup}
+    </button>`;
+}
+
+function loadoutItemGroupMarkup(items, emptyLabel, extraClasses = '') {
+  const rows = (items || []).filter(Boolean);
+  if (!rows.length) return loadoutItemMarkup(null, emptyLabel, extraClasses);
+  if (rows.length === 1) return loadoutItemMarkup(rows[0], emptyLabel, extraClasses);
+  return `
+    <div class="loadout-slot-stack ${extraClasses}" title="${escapeHtml(rows.map(item => `${equipmentSlotLabel(item.slotIndex)}: ${item.name}`).join(' | '))}">
+      ${rows.map(item => loadoutItemMarkup(item, emptyLabel, 'loadout-stack-item')).join('')}
+    </div>`;
+}
+
+function sumItemGe(items) {
+  return (items || []).reduce((sum, item) => sum + Number(item?.geTotal || 0), 0);
+}
+
+function sumItemHa(items) {
+  return (items || []).reduce((sum, item) => sum + Number(item?.haTotal || 0), 0);
 }
 
 function previousSnapshot() {
@@ -242,20 +446,41 @@ function daysAgo(iso, days) {
 
 function findDynamicDelta(snapshot) {
   const ranges = [
-    { days: 30, label: 'Delta vs 1 month' },
-    { days: 14, label: 'Delta vs 2 weeks' },
-    { days: 7, label: 'Delta vs 1 week' },
-    { days: 1, label: 'Delta vs 1 day' }
+    { value: '365', days: 365, label: 'Delta vs 1 year' },
+    { value: '180', days: 180, label: 'Delta vs 6 months' },
+    { value: '90', days: 90, label: 'Delta vs 3 months' },
+    { value: '30', days: 30, label: 'Delta vs 1 month' },
+    { value: '14', days: 14, label: 'Delta vs 2 weeks' },
+    { value: '7', days: 7, label: 'Delta vs 1 week' },
+    { value: '1', days: 1, label: 'Delta vs 1 day' }
   ];
-  for (const range of ranges) {
-    const reference = snapshotAtOrBefore(daysAgo(snapshot.capturedAt, range.days));
-    if (reference && reference.capturedAt !== snapshot.capturedAt) {
+
+  if (state.dynamicDeltaMode === 'first') {
+    const oldest = state.snapshots[0] || null;
+    if (oldest && oldest.capturedAt !== snapshot.capturedAt) {
+      const delta = Number(snapshot.totalGe || 0) - Number(oldest.totalGe || 0);
       return {
-        label: range.label,
-        valueHtml: gpSpan(Number(snapshot.totalGe || 0) - Number(reference.totalGe || 0), positiveNegativeClass(Number(snapshot.totalGe || 0) - Number(reference.totalGe || 0)))
+        label: 'Delta vs first snapshot',
+        valueHtml: gpSpan(delta, positiveNegativeClass(delta))
       };
     }
   }
+
+  const selectedRanges = state.dynamicDeltaMode === 'auto'
+    ? ranges
+    : ranges.filter(range => range.value === String(state.dynamicDeltaMode));
+
+  for (const range of selectedRanges) {
+    const reference = snapshotAtOrBefore(daysAgo(snapshot.capturedAt, range.days));
+    if (reference && reference.capturedAt !== snapshot.capturedAt) {
+      const delta = Number(snapshot.totalGe || 0) - Number(reference.totalGe || 0);
+      return {
+        label: range.label,
+        valueHtml: gpSpan(delta, positiveNegativeClass(delta))
+      };
+    }
+  }
+
   const oldest = state.snapshots[0] || null;
   if (oldest && oldest.capturedAt !== snapshot.capturedAt) {
     const delta = Number(snapshot.totalGe || 0) - Number(oldest.totalGe || 0);
@@ -264,6 +489,7 @@ function findDynamicDelta(snapshot) {
       valueHtml: gpSpan(delta, positiveNegativeClass(delta))
     };
   }
+
   return {
     label: 'Delta vs history',
     valueHtml: '<span class="muted">Need more history</span>'
@@ -286,7 +512,7 @@ function renderCompareControls(snapshot) {
   els.compareASelect.innerHTML = '';
   els.compareBSelect.innerHTML = '';
   snapshots.forEach((entry, index) => {
-    const label = `${entry.day} ${new Date(entry.capturedAt).toLocaleTimeString()}`;
+    const label = snapshotLabel(entry);
     const optA = document.createElement('option');
     optA.value = String(index);
     optA.textContent = label;
@@ -300,10 +526,12 @@ function renderCompareControls(snapshot) {
   if (els.compareASelect.dataset.bound !== '1') {
     els.compareASelect.dataset.bound = '1';
     els.compareASelect.addEventListener('change', () => {
+      syncComparePickers();
       applyComparisonForIndexes(Number(els.compareASelect.value), Number(els.compareBSelect.value));
     });
     els.compareBSelect.dataset.bound = '1';
     els.compareBSelect.addEventListener('change', () => {
+      syncComparePickers();
       applyComparisonForIndexes(Number(els.compareASelect.value), Number(els.compareBSelect.value));
     });
   }
@@ -312,6 +540,7 @@ function renderCompareControls(snapshot) {
   const bIndex = Math.max(0, state.selectedIndex - 1);
   els.compareASelect.value = String(aIndex);
   els.compareBSelect.value = String(bIndex);
+  syncComparePickers();
   applyComparisonForIndexes(aIndex, bIndex);
 }
 
@@ -323,13 +552,17 @@ async function applyComparisonForIndexes(aIndex, bIndex) {
 
 function applyComparison(current, previous) {
   if (!current || !previous || !snapshotHasDetails(current) || !snapshotHasDetails(previous)) return;
-  const geDelta = Number(current.totalGe || 0) - Number(previous.totalGe || 0);
-  const haDelta = Number(current.totalHa || 0) - Number(previous.totalHa || 0);
+  const geDelta = snapshotBankGe(current) - snapshotBankGe(previous);
+  const haDelta = snapshotBankHa(current) - snapshotBankHa(previous);
+  const combinedGeDelta = snapshotCombinedGe(current) - snapshotCombinedGe(previous);
+  const combinedHaDelta = snapshotCombinedHa(current) - snapshotCombinedHa(previous);
   els.compareSummaryGrid.innerHTML = [
     ['Compare A', escapeHtml(new Date(current.capturedAt).toLocaleString())],
     ['Compare B', escapeHtml(new Date(previous.capturedAt).toLocaleString())],
-    ['GE delta', gpSpan(geDelta, positiveNegativeClass(geDelta))],
-    ['HA delta', gpSpan(haDelta, positiveNegativeClass(haDelta))]
+    ['Bank GE delta', gpSpan(geDelta, positiveNegativeClass(geDelta))],
+    ['Bank HA delta', gpSpan(haDelta, positiveNegativeClass(haDelta))],
+    ['Combined GE delta', gpSpan(combinedGeDelta, positiveNegativeClass(combinedGeDelta))],
+    ['Combined HA delta', gpSpan(combinedHaDelta, positiveNegativeClass(combinedHaDelta))]
   ].map(([label, value]) => `
     <div class="summary-box">
       <div class="label">${label}</div>
@@ -441,7 +674,7 @@ function byCanonical(snapshot) {
   return map;
 }
 
-function computeMovers(current, previous, limit = 10) {
+function computeMovers(current, previous, limit = 20) {
   const prevMap = previous ? byCanonical(previous) : new Map();
   const currentMap = byCanonical(current);
   const ids = new Set([...currentMap.keys(), ...prevMap.keys()]);
@@ -483,7 +716,7 @@ function renderMoverRows(table, rows, valueTitle) {
   rows.forEach(row => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><button class="row-link icon-cell" data-item-id="${row.canonicalItemId}"><img loading="lazy" src="${row.iconPath}" alt=""><span>${escapeHtml(row.name)}</span></button></td>
+      <td><button class="row-link icon-cell" data-item-id="${row.canonicalItemId}" title="${escapeHtml(`${row.name} | ${row.currentTab || 'Main'} | Qty ${formatNumber(row.quantityNow || 0)}`)}"><img loading="lazy" src="${row.iconPath}" alt=""><span>${escapeHtml(row.name)}</span></button></td>
       <td>${gpSpan(row.delta, positiveNegativeClass(row.delta))}</td>
       <td>${numberSpan(row.quantityNow)}</td>
       <td>${row.quantityDelta >= 0 ? '+' : ''}${numberSpan(row.quantityDelta)}</td>
@@ -498,19 +731,73 @@ function renderMoverRows(table, rows, valueTitle) {
 }
 
 function renderSummary(snapshot, previous) {
-  const delta = previous ? Number(snapshot.totalGe || 0) - Number(previous.totalGe || 0) : 0;
+  const bankGe = snapshotBankGe(snapshot);
+  const bankHa = snapshotBankHa(snapshot);
+  const inventoryGe = snapshotInventoryGe(snapshot);
+  const inventoryHa = snapshotInventoryHa(snapshot);
+  const equipmentGe = snapshotEquipmentGe(snapshot);
+  const equipmentHa = snapshotEquipmentHa(snapshot);
+  const combinedGe = snapshotCombinedGe(snapshot);
+  const combinedHa = snapshotCombinedHa(snapshot);
+  const bankDelta = previous ? bankGe - snapshotBankGe(previous) : 0;
+  const combinedDelta = previous ? combinedGe - snapshotCombinedGe(previous) : 0;
   const dynamicDelta = findDynamicDelta(snapshot);
-  const items = decorateItems(snapshot).filter(item => !item.placeholder);
-  const cards = [
-    ['Captured', escapeHtml(new Date(snapshot.capturedAt).toLocaleString())],
-    ['Captured GE', gpSpan(snapshot.totalGe)],
-    ['Captured HA', gpSpan(snapshot.totalHa)],
-    ['Real items', numberSpan(items.length)],
-    ['Total quantity', numberSpan(items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))],
-    ['Delta vs previous', previous ? gpSpan(delta, positiveNegativeClass(delta)) : '<span class="muted">No previous snapshot</span>'],
+  const wealthColumns = [
+    ['Bank', bankGe, bankHa],
+    ['Worn', equipmentGe, equipmentHa],
+    ['Inventory', inventoryGe, inventoryHa],
+    ['All combined', combinedGe, combinedHa]
+  ];
+
+  const deltaCards = [
+    ['Bank delta vs previous', previous ? gpSpan(bankDelta, positiveNegativeClass(bankDelta)) : '<span class="muted">No previous snapshot</span>'],
+    ['All combined delta vs previous', previous ? gpSpan(combinedDelta, positiveNegativeClass(combinedDelta)) : '<span class="muted">No previous snapshot</span>'],
     [dynamicDelta.label, dynamicDelta.valueHtml]
   ];
-  els.summaryGrid.innerHTML = cards.map(([label, value]) => `
+
+  els.summaryGrid.innerHTML = `
+    <div class="summary-box summary-captured-box">
+      <div class="label">Captured</div>
+      <div class="value">${escapeHtml(new Date(snapshot.capturedAt).toLocaleString())}</div>
+    </div>
+    <div class="summary-box wealth-summary-box">
+      <div class="wealth-summary-grid wealth-summary-head">
+        <div></div>
+        ${wealthColumns.map(([label]) => `<div class="wealth-summary-label">${escapeHtml(label)}</div>`).join('')}
+      </div>
+      <div class="wealth-summary-grid">
+        <div class="wealth-summary-row-label">GE</div>
+        ${wealthColumns.map(([, ge]) => `<div class="wealth-summary-value">${gpSpan(ge)}</div>`).join('')}
+      </div>
+      <div class="wealth-summary-grid">
+        <div class="wealth-summary-row-label">HA</div>
+        ${wealthColumns.map(([, , ha]) => `<div class="wealth-summary-value">${gpSpan(ha)}</div>`).join('')}
+      </div>
+    </div>
+    ${deltaCards.map(([label, value]) => `
+      <div class="summary-box">
+        <div class="label">${label}</div>
+        <div class="value">${value}</div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderLoadoutSummary(snapshot) {
+  if (!els.loadoutSummaryGrid) return;
+  const inventoryItems = snapshotInventoryItems(snapshot).filter(item => !item.placeholder);
+  const equipmentItems = snapshotEquipmentItems(snapshot).filter(item => !item.placeholder);
+  const cards = [
+    ['Inventory GE', gpSpan(snapshotInventoryGe(snapshot))],
+    ['Inventory HA', gpSpan(snapshotInventoryHa(snapshot))],
+    ['Inventory used slots', numberSpan(inventoryItems.length)],
+    ['Worn GE', gpSpan(snapshotEquipmentGe(snapshot))],
+    ['Worn HA', gpSpan(snapshotEquipmentHa(snapshot))],
+    ['Worn used slots', numberSpan(equipmentItems.length)],
+    ['Combined GE', gpSpan(snapshotCombinedGe(snapshot))],
+    ['Combined HA', gpSpan(snapshotCombinedHa(snapshot))]
+  ];
+  els.loadoutSummaryGrid.innerHTML = cards.map(([label, value]) => `
     <div class="summary-box">
       <div class="label">${label}</div>
       <div class="value">${value}</div>
@@ -830,7 +1117,8 @@ function getTabImagePath(snapshot, tabIndex) {
     tab?.imagePath, tab?.screenshotPath, tab?.renderPath, tab?.pngPath,
     snapshot?.bankImagePath, snapshot?.imagePath, snapshot?.screenshotPath
   ];
-  return safeAssetPath(candidates.find(Boolean) || '', '');
+  const version = `${snapshot?.capturedAt || '0'}:${tabIndex}:${state.requestToken}`;
+  return addAssetVersion(candidates.find(Boolean) || '', version);
 }
 
 function getCapturedBankTabIndex(snapshot) {
@@ -893,7 +1181,7 @@ function renderAllTabGroups(snapshot, items) {
               ${sectionItems.map(item => `
                 <button class="bank-slot ${item.placeholder ? 'placeholder' : ''} ${state.selectedItemId === item.canonicalItemId ? 'is-selected' : ''}" data-item-id="${item.canonicalItemId}" title="${escapeHtml(item.name)} | ${escapeHtml(item.effectiveTabName || 'Main')} | Qty ${formatNumber(item.quantity)} | GE ${formatGp(item.geTotal)} | HA ${formatGp(item.haTotal)}">
                   <img loading="lazy" src="${item.iconPath}" alt="${escapeHtml(item.name)}">
-                  ${item.placeholder ? '' : `<span class="qty">${formatNumber(item.quantity)}</span>`}
+                  ${item.placeholder ? '<span class="placeholder-mark">PH</span>' : `<span class="qty">${formatNumber(item.quantity)}</span>`}
                 </button>
               `).join('')}
             </div>
@@ -965,7 +1253,7 @@ function renderBankGrid(snapshot) {
         ${items.map(item => `
           <button class="bank-slot ${item.placeholder ? 'placeholder' : ''} ${state.selectedItemId === item.canonicalItemId ? 'is-selected' : ''}" data-item-id="${item.canonicalItemId}" title="${escapeHtml(item.name)} | ${escapeHtml(item.effectiveTabName || 'Main')} | Qty ${formatNumber(item.quantity)} | GE ${formatGp(item.geTotal)} | HA ${formatGp(item.haTotal)}">
             <img loading="lazy" src="${item.iconPath}" alt="${escapeHtml(item.name)}">
-            ${item.placeholder ? '' : `<span class="qty">${formatNumber(item.quantity)}</span>`}
+            ${item.placeholder ? '<span class="placeholder-mark">PH</span>' : `<span class="qty">${formatNumber(item.quantity)}</span>`}
           </button>
         `).join('')}
       </div>
@@ -1084,19 +1372,19 @@ function renderBrowserItemDetails(snapshot) {
     els.browserItemDetails.innerHTML = '<div class="muted">No item selected in this view.</div>';
     return;
   }
-  const cachedHistory = state.itemHistoryCache[String(item.canonicalItemId || '')] || null;
-  const series = (cachedHistory ? itemSeriesFromSnapshots(item.canonicalItemId) : []).filter(point => point.item).slice(-5).reverse();
+  const historyKey = String(item.canonicalItemId || '');
+  const cachedHistory = state.itemHistoryCache[historyKey] || buildLocalItemHistory(item.canonicalItemId);
+  state.itemHistoryCache[historyKey] = cachedHistory;
+  const series = itemSeriesFromSnapshots(item.canonicalItemId).filter(point => point.item).slice(-5).reverse();
   const wiki = resolveWikiEntry(item);
 
-  const historyRows = cachedHistory
-    ? (series.map(point => `
+  const historyRows = series.map(point => `
         <div class="history-row">
           <span>${escapeHtml(point.label)}</span>
           <span>${escapeHtml(point.tabName)}</span>
           <span>${gpSpan(point.item.geTotal)}</span>
         </div>
-      `).join('') || '<div class="muted">No snapshot history for this item.</div>')
-    : '<div class="muted">Loading snapshot history…</div>';
+      `).join('') || '<div class="muted">No snapshot history for this item.</div>';
 
   let wikiHtml = '<div class="note-box">This item does not have a matching OSRS Wiki market entry. The captured item id, canonical id, exact item name, and simplified item name were checked.</div>';
   if (wiki) {
@@ -1191,10 +1479,105 @@ function renderBrowserItemDetails(snapshot) {
   }
 }
 
+function renderSourceItemRows(table, items, emptyLabel, options = {}) {
+  if (!table) return;
+  const rows = (items || []).filter(item => !item.placeholder).slice().sort((a, b) => Number(a.slotIndex || 0) - Number(b.slotIndex || 0));
+  const slotFormatter = typeof options.slotFormatter === 'function'
+    ? options.slotFormatter
+    : value => formatNumber(Number(value || 0) + 1);
+  table.innerHTML = `
+    <thead><tr><th>Item</th><th>Qty</th><th>GE total</th><th>HA total</th><th>Slot</th></tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector('tbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+    return;
+  }
+  rows.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><button class="row-link icon-cell" data-item-id="${item.canonicalItemId}"><img loading="lazy" src="${item.iconPath}" alt=""><span>${escapeHtml(item.name)}</span></button></td>
+      <td>${numberSpan(item.quantity)}</td>
+      <td>${gpSpan(item.geTotal)}</td>
+      <td>${gpSpan(item.haTotal)}</td>
+      <td>${escapeHtml(slotFormatter(item.slotIndex, item))}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('[data-item-id]').forEach(btn => btn.addEventListener('click', event => {
+    event.preventDefault();
+    selectItem(Number(btn.dataset.itemId));
+  }));
+}
+
+function renderEquipmentVisual(snapshot) {
+  if (!els.equipmentVisual) return;
+  const { slots, extras } = buildEquipmentVisualState(snapshotEquipmentItems(snapshot));
+  els.equipmentVisual.innerHTML = `
+    <div class="equipment-board">
+      ${slots.map(slot => `
+        <div class="equipment-slot equipment-slot-${slot.key}">
+          <div class="equipment-slot-label">${escapeHtml(slot.label)}</div>
+          ${loadoutItemGroupMarkup(slot.items, slot.label, 'equipment-slot-inner')}
+        </div>
+      `).join('')}
+    </div>
+    ${extras.length ? `
+      <div class="loadout-extra-list">
+        <div class="muted small">Other captured equipment slots</div>
+        <div class="loadout-extra-items">
+          ${extras.map(item => `<span class="loadout-extra-pill">${escapeHtml(equipmentSlotLabel(item.slotIndex))}: ${escapeHtml(item.name)}</span>`).join('')}
+        </div>
+      </div>` : ''}
+  `;
+  els.equipmentVisual.querySelectorAll('[data-item-id]').forEach(btn => btn.addEventListener('click', event => {
+    event.preventDefault();
+    selectItem(Number(btn.dataset.itemId));
+  }));
+}
+
+function renderInventoryVisual(snapshot) {
+  if (!els.inventoryVisual) return;
+  const itemsBySlot = new Map(snapshotInventoryItems(snapshot).filter(item => !item.placeholder).map(item => [Number(item.slotIndex || 0), item]));
+  const slots = [];
+  for (let index = 0; index < 28; index += 1) {
+    const item = itemsBySlot.get(index) || null;
+    slots.push(`
+      <div class="inventory-slot">
+        <div class="inventory-slot-index">${index + 1}</div>
+        ${loadoutItemMarkup(item, '', 'inventory-slot-inner')}
+      </div>
+    `);
+  }
+  els.inventoryVisual.innerHTML = `<div class="inventory-board">${slots.join('')}</div>`;
+  els.inventoryVisual.querySelectorAll('[data-item-id]').forEach(btn => btn.addEventListener('click', event => {
+    event.preventDefault();
+    selectItem(Number(btn.dataset.itemId));
+  }));
+}
+
+function renderInventoryEquipment(snapshot) {
+  renderLoadoutSummary(snapshot);
+  renderEquipmentVisual(snapshot);
+  renderInventoryVisual(snapshot);
+  renderSourceItemRows(els.inventoryTable, snapshotInventoryItems(snapshot), 'No inventory items captured.');
+  renderSourceItemRows(els.equipmentTable, snapshotEquipmentItems(snapshot), 'No worn equipment captured.', {
+    slotFormatter: value => equipmentSlotLabel(value)
+  });
+}
+
 function renderBrowser(snapshot) {
   renderBankTabButtons(snapshot);
   renderBankGrid(snapshot);
-  const rows = visibleItems(snapshot).map(item => ({
+  const visible = visibleItems(snapshot);
+  const realCount = visible.filter(item => !item.placeholder).length;
+  const placeholderCount = visible.filter(item => item.placeholder).length;
+  if (els.currentViewMeta) {
+    els.currentViewMeta.innerHTML = `<span class="current-view-meta-pill">${formatNumber(visible.length)} shown · ${formatNumber(realCount)} valued${placeholderCount ? ` · ${formatNumber(placeholderCount)} placeholders` : ''}</span>`;
+  }
+
+  const rows = visible.map(item => ({
     canonicalItemId: item.canonicalItemId,
     name: item.name,
     iconPath: item.iconPath,
@@ -1208,11 +1591,11 @@ function renderBrowser(snapshot) {
     <thead><tr><th>Item</th><th>Qty</th><th>GE total</th><th>HA total</th><th>Tab</th></tr></thead>
     <tbody>
       ${rows.map(item => `
-        <tr>
-          <td><button class="row-link icon-cell" data-item-id="${item.canonicalItemId}"><img loading="lazy" src="${item.iconPath}" alt=""><span>${escapeHtml(item.name)}</span></button></td>
-          <td>${item.placeholder ? '-' : numberSpan(item.quantity)}</td>
-          <td>${item.placeholder ? '-' : gpSpan(item.geTotal)}</td>
-          <td>${item.placeholder ? '-' : gpSpan(item.haTotal)}</td>
+        <tr class="${item.placeholder ? 'is-placeholder-row' : ''}">
+          <td><button class="row-link icon-cell" data-item-id="${item.canonicalItemId}"><img loading="lazy" src="${item.iconPath}" alt=""><span>${escapeHtml(item.name)}</span>${item.placeholder ? '<span class="placeholder-badge">Placeholder</span>' : ''}</button></td>
+          <td>${item.placeholder ? '<span class="muted">—</span>' : numberSpan(item.quantity)}</td>
+          <td>${item.placeholder ? '<span class="muted">—</span>' : gpSpan(item.geTotal)}</td>
+          <td>${item.placeholder ? '<span class="muted">—</span>' : gpSpan(item.haTotal)}</td>
           <td>${escapeHtml(item.currentTab || 'Main')}</td>
         </tr>`).join('')}
     </tbody>
@@ -1291,26 +1674,8 @@ function renderSelectedItemCharts() {
   }
 
   const key = String(item.canonicalItemId || '');
-  const cached = state.itemHistoryCache[key];
-  if (!cached) {
-    drawLineChart(els.itemValueChart, []);
-    drawLineChart(els.itemQuantityChart, []);
-    const token = ++state.itemHistoryRequestToken;
-    loadItemHistory(item.canonicalItemId)
-      .then(() => {
-        const latestSnapshot = currentSnapshot();
-        const currentItem = currentItemFromLatest();
-        if (token !== state.itemHistoryRequestToken) return;
-        if (latestSnapshot && currentItem && Number(currentItem.canonicalItemId) === Number(item.canonicalItemId)) {
-          renderSelectedItemCharts();
-        }
-      })
-      .catch(() => {
-        if (token !== state.itemHistoryRequestToken) return;
-        drawLineChart(els.itemValueChart, []);
-        drawLineChart(els.itemQuantityChart, []);
-      });
-    return;
+  if (!state.itemHistoryCache[key]) {
+    state.itemHistoryCache[key] = buildLocalItemHistory(item.canonicalItemId);
   }
 
   const series = itemSeriesFromSnapshots(item.canonicalItemId);
@@ -1350,12 +1715,337 @@ function selectItem(itemId) {
   renderSelectedItemCharts();
 }
 
+const SNAPSHOT_PICKER_DEFAULT_LIMIT = 60;
+const SNAPSHOT_PICKER_FILTER_LIMIT = 120;
+
+function snapshotLabel(snapshot) {
+  if (!snapshot) return 'Unknown snapshot';
+  return `${snapshot.day} ${new Date(snapshot.capturedAt).toLocaleTimeString()}`;
+}
+
+function ensureSnapshotPicker() {
+  const select = els.snapshotSelect;
+  if (!select) return null;
+  if (select._snapshotPicker) return select._snapshotPicker;
+
+  const parent = select.parentElement;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'snapshot-picker';
+
+  parent.insertBefore(wrapper, select);
+  wrapper.appendChild(select);
+  select.classList.add('snapshot-native-select');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'snapshot-picker-button';
+  button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
+
+  const menu = document.createElement('div');
+  menu.className = 'snapshot-picker-menu';
+  menu.hidden = true;
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'snapshot-picker-search';
+  search.placeholder = 'Filter snapshots...';
+  search.autocomplete = 'off';
+
+  const options = document.createElement('div');
+  options.className = 'snapshot-picker-options';
+  options.setAttribute('role', 'listbox');
+
+  const meta = document.createElement('div');
+  meta.className = 'snapshot-picker-meta muted small';
+
+  menu.appendChild(search);
+  menu.appendChild(options);
+  menu.appendChild(meta);
+  wrapper.appendChild(button);
+  wrapper.appendChild(menu);
+
+  const picker = { wrapper, button, menu, search, options, meta };
+  select._snapshotPicker = picker;
+
+  const close = () => {
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    renderSnapshotPickerOptions(search.value || '');
+    search.focus();
+    search.select();
+  };
+
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    if (menu.hidden) open(); else close();
+  });
+
+  search.addEventListener('input', () => renderSnapshotPickerOptions(search.value || ''));
+  search.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+      button.focus();
+    }
+  });
+
+  document.addEventListener('click', event => {
+    if (!wrapper.contains(event.target)) close();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') close();
+  });
+
+  return picker;
+}
+
+function renderSnapshotPickerOptions(filterText = '') {
+  const picker = ensureSnapshotPicker();
+  if (!picker) return;
+
+  const term = String(filterText || '').trim().toLowerCase();
+  const rows = state.snapshots
+    .map((snapshot, index) => ({ index, snapshot, label: snapshotLabel(snapshot) }))
+    .filter(row => !term || row.label.toLowerCase().includes(term))
+    .reverse();
+
+  const limit = term ? SNAPSHOT_PICKER_FILTER_LIMIT : SNAPSHOT_PICKER_DEFAULT_LIMIT;
+  const visible = rows.slice(0, limit);
+  picker.options.innerHTML = '';
+
+  if (!state.snapshots.length) {
+    picker.options.innerHTML = '<div class="snapshot-picker-empty muted">No snapshots</div>';
+    picker.meta.textContent = '';
+    return;
+  }
+
+  if (!visible.length) {
+    picker.options.innerHTML = '<div class="snapshot-picker-empty muted">No matching snapshot</div>';
+    picker.meta.textContent = 'Try another date or time.';
+    return;
+  }
+
+  visible.forEach(row => {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = `snapshot-picker-option${row.index === state.selectedIndex ? ' is-active' : ''}`;
+    opt.dataset.index = String(row.index);
+    opt.setAttribute('role', 'option');
+    opt.setAttribute('aria-selected', row.index === state.selectedIndex ? 'true' : 'false');
+    opt.innerHTML = `
+      <span>${escapeHtml(row.label)}</span>
+      ${row.index === state.selectedIndex ? '<span class="snapshot-current">Current</span>' : ''}
+    `;
+    opt.addEventListener('click', () => {
+      els.snapshotSelect.value = String(row.index);
+      picker.menu.hidden = true;
+      picker.button.setAttribute('aria-expanded', 'false');
+      picker.search.value = '';
+      els.snapshotSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    picker.options.appendChild(opt);
+  });
+
+  const hiddenCount = rows.length - visible.length;
+  picker.meta.textContent = hiddenCount > 0
+    ? `Showing ${visible.length} of ${rows.length}. Type to filter older snapshots.`
+    : `Showing ${visible.length} snapshot${visible.length === 1 ? '' : 's'}.`;
+}
+
+function syncSnapshotPicker() {
+  const picker = ensureSnapshotPicker();
+  if (!picker) return;
+
+  if (!state.snapshots.length) {
+    picker.button.textContent = 'No snapshots';
+    picker.button.disabled = true;
+    picker.menu.hidden = true;
+    picker.meta.textContent = '';
+    return;
+  }
+
+  picker.button.disabled = false;
+  const selected = state.snapshots[state.selectedIndex] || state.snapshots[Number(els.snapshotSelect.value)] || state.snapshots[state.snapshots.length - 1];
+  picker.button.textContent = snapshotLabel(selected);
+  renderSnapshotPickerOptions(picker.search.value || '');
+}
+
+
+function ensureComparePicker(select, pickerLabel) {
+  if (!select) return null;
+  if (select._comparePicker) return select._comparePicker;
+
+  const parent = select.parentElement;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'snapshot-picker compare-picker';
+
+  parent.insertBefore(wrapper, select);
+  wrapper.appendChild(select);
+  select.classList.add('snapshot-native-select');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'snapshot-picker-button compare-picker-button';
+  button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
+
+  const menu = document.createElement('div');
+  menu.className = 'snapshot-picker-menu compare-picker-menu';
+  menu.hidden = true;
+
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'snapshot-picker-search';
+  search.placeholder = `Filter ${pickerLabel} snapshots...`;
+  search.autocomplete = 'off';
+
+  const options = document.createElement('div');
+  options.className = 'snapshot-picker-options';
+  options.setAttribute('role', 'listbox');
+
+  const meta = document.createElement('div');
+  meta.className = 'snapshot-picker-meta muted small';
+
+  menu.appendChild(search);
+  menu.appendChild(options);
+  menu.appendChild(meta);
+  wrapper.appendChild(button);
+  wrapper.appendChild(menu);
+
+  const picker = { wrapper, button, menu, search, options, meta, label: pickerLabel };
+  select._comparePicker = picker;
+
+  const close = () => {
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    renderComparePickerOptions(select, search.value || '');
+    search.focus();
+    search.select();
+  };
+
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    if (menu.hidden) open(); else close();
+  });
+
+  search.addEventListener('input', () => renderComparePickerOptions(select, search.value || ''));
+  search.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+      button.focus();
+    }
+  });
+
+  document.addEventListener('click', event => {
+    if (!wrapper.contains(event.target)) close();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') close();
+  });
+
+  return picker;
+}
+
+function renderComparePickerOptions(select, filterText = '') {
+  const picker = ensureComparePicker(select, select === els.compareASelect ? 'A' : 'B');
+  if (!picker) return;
+
+  const selectedIndex = Number(select.value);
+  const term = String(filterText || '').trim().toLowerCase();
+  const rows = state.snapshots
+    .map((snapshot, index) => ({ index, snapshot, label: snapshotLabel(snapshot) }))
+    .filter(row => !term || row.label.toLowerCase().includes(term))
+    .reverse();
+
+  const limit = term ? SNAPSHOT_PICKER_FILTER_LIMIT : SNAPSHOT_PICKER_DEFAULT_LIMIT;
+  const visible = rows.slice(0, limit);
+  picker.options.innerHTML = '';
+
+  if (!state.snapshots.length) {
+    picker.options.innerHTML = '<div class="snapshot-picker-empty muted">No snapshots</div>';
+    picker.meta.textContent = '';
+    return;
+  }
+
+  if (!visible.length) {
+    picker.options.innerHTML = '<div class="snapshot-picker-empty muted">No matching snapshot</div>';
+    picker.meta.textContent = 'Try another date or time.';
+    return;
+  }
+
+  visible.forEach(row => {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = `snapshot-picker-option${row.index === selectedIndex ? ' is-active' : ''}`;
+    opt.dataset.index = String(row.index);
+    opt.setAttribute('role', 'option');
+    opt.setAttribute('aria-selected', row.index === selectedIndex ? 'true' : 'false');
+    opt.innerHTML = `
+      <span>${escapeHtml(row.label)}</span>
+      ${row.index === selectedIndex ? '<span class="snapshot-current">Selected</span>' : ''}
+    `;
+    opt.addEventListener('click', () => {
+      select.value = String(row.index);
+      picker.menu.hidden = true;
+      picker.button.setAttribute('aria-expanded', 'false');
+      picker.search.value = '';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    picker.options.appendChild(opt);
+  });
+
+  const hiddenCount = rows.length - visible.length;
+  picker.meta.textContent = hiddenCount > 0
+    ? `Showing ${visible.length} of ${rows.length}. Type to filter older snapshots.`
+    : `Showing ${visible.length} snapshot${visible.length === 1 ? '' : 's'}.`;
+}
+
+function syncComparePicker(select, fallbackLabel) {
+  const picker = ensureComparePicker(select, fallbackLabel);
+  if (!picker) return;
+
+  if (!state.snapshots.length) {
+    picker.button.textContent = 'No snapshots';
+    picker.button.disabled = true;
+    picker.menu.hidden = true;
+    picker.meta.textContent = '';
+    return;
+  }
+
+  picker.button.disabled = false;
+  const selected = state.snapshots[Number(select.value)] || null;
+  picker.button.textContent = selected ? snapshotLabel(selected) : `Select ${fallbackLabel}`;
+  renderComparePickerOptions(select, picker.search.value || '');
+}
+
+function syncComparePickers() {
+  syncComparePicker(els.compareASelect, 'A');
+  syncComparePicker(els.compareBSelect, 'B');
+}
+
 function render() {
+  syncSnapshotPicker();
   const snapshot = currentSnapshot();
   if (!snapshot) {
     els.profileTitle.textContent = '';
     els.statusText.textContent = 'No bank snapshots found yet. Open the bank in RuneLite and capture one.';
+    if (els.deleteSnapshotBtn) els.deleteSnapshotBtn.disabled = true;
     els.summaryGrid.innerHTML = '';
+    if (els.loadoutSummaryGrid) els.loadoutSummaryGrid.innerHTML = '';
+    if (els.inventoryVisual) els.inventoryVisual.innerHTML = '';
+    if (els.equipmentVisual) els.equipmentVisual.innerHTML = '';
+    if (els.inventoryTable) els.inventoryTable.innerHTML = '';
+    if (els.equipmentTable) els.equipmentTable.innerHTML = '';
     els.bankRecreation.innerHTML = '';
     els.holdingsTable.innerHTML = '';
     els.marketEstimateBox.innerHTML = '';
@@ -1365,15 +2055,17 @@ function render() {
     drawLineChart(els.itemQuantityChart, []);
     return;
   }
+  if (els.deleteSnapshotBtn) els.deleteSnapshotBtn.disabled = false;
   updateHeader(snapshot);
   renderSummary(snapshot, previousSnapshot());
+  renderInventoryEquipment(snapshot);
   renderCompareControls(snapshot);
   renderBrowser(snapshot);
   renderMarket(snapshot);
   drawLineChart(els.totalChart, state.snapshots.map((s, index) => ({
     label: formatChartShortTimestamp(s.capturedAt),
     tooltipLabel: formatChartTooltipTimestamp(s.capturedAt),
-    value: s.totalGe,
+    value: snapshotCombinedGe(s),
     snapshotIndex: index
   })), '#7cc5ff', {
     valueFormatter: formatGp,
@@ -1410,6 +2102,44 @@ function populateSnapshotSelect() {
   });
   state.selectedIndex = state.snapshots.length - 1;
   els.snapshotSelect.value = String(state.selectedIndex);
+  syncSnapshotPicker();
+}
+
+
+function populateProfileSelect() {
+  if (!els.profileSelect) return;
+  const profiles = Array.isArray(state.profiles) ? state.profiles : [];
+  els.profileSelect.innerHTML = '';
+  if (!profiles.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No character';
+    els.profileSelect.appendChild(option);
+    els.profileSelect.disabled = true;
+    return;
+  }
+
+  profiles.forEach(profile => {
+    const opt = document.createElement('option');
+    const name = typeof profile === 'string' ? profile : String(profile.name || '');
+    const count = typeof profile === 'string' ? '' : (profile.snapshotCount ? ` (${profile.snapshotCount})` : '');
+    opt.value = name;
+    opt.textContent = `${name}${count}`;
+    els.profileSelect.appendChild(opt);
+  });
+
+  els.profileSelect.disabled = profiles.length <= 1;
+  const desired = state.activeProfile || state.status?.currentProfile || '';
+  if (desired) {
+    els.profileSelect.value = desired;
+    if (els.profileSelect.value !== desired) {
+      const opt = document.createElement('option');
+      opt.value = desired;
+      opt.textContent = desired;
+      els.profileSelect.insertBefore(opt, els.profileSelect.firstChild);
+      els.profileSelect.value = desired;
+    }
+  }
 }
 
 function buildMappingIndexes(entries) {
@@ -1455,39 +2185,103 @@ async function loadLivePrices() {
   state.livePriceMap = payload.data || {};
 }
 
+
+async function deleteCurrentSnapshot() {
+  const snapshot = currentSnapshot();
+  if (!snapshot || !snapshot.capturedAt) {
+    return;
+  }
+
+  const label = snapshotLabel(snapshot);
+  const ok = window.confirm(`Delete selected snapshot?\n\n${label}\n\nThis removes the snapshot data, bank image, and matching per-snapshot icons. Legacy global icons are kept for compatibility.`);
+  if (!ok) {
+    return;
+  }
+
+  if (els.deleteSnapshotBtn) {
+    els.deleteSnapshotBtn.disabled = true;
+  }
+
+  try {
+    await fetchJson(apiUrl('/api/snapshot', { capturedAt: snapshot.capturedAt }), {
+      method: 'DELETE',
+      headers: stateChangingHeaders({ 'X-BVH-Action': 'delete-snapshot' })
+    });
+    els.statusText.textContent = `Deleted snapshot ${label}.`;
+    await loadData();
+  } catch (error) {
+    els.statusText.textContent = `Failed to delete snapshot: ${error}`;
+  } finally {
+    if (els.deleteSnapshotBtn) {
+      els.deleteSnapshotBtn.disabled = false;
+    }
+  }
+}
+
+
 async function loadData() {
-  const [status, summaries] = await Promise.all([
-    fetchJson('/api/status'),
-    fetchJson('/api/snapshots')
-  ]);
+  const status = await fetchJson('/api/status');
   state.status = status;
+  state.csrfToken = status?.csrfToken || '';
+  state.activeProfile = status?.currentProfile || state.activeProfile || '';
+
+  const [summaries, profiles] = await Promise.all([
+    fetchJson('/api/snapshots'),
+    fetchJson('/api/profiles')
+  ]);
+
+  state.profiles = Array.isArray(profiles?.profiles) ? profiles.profiles : (Array.isArray(profiles) ? profiles : []);
   state.snapshots = Array.isArray(summaries) ? summaries : [];
   state.snapshotDetails = {};
   state.itemHistoryCache = {};
   state.itemHistoryPending = {};
   state.snapshots.sort((a, b) => String(a.capturedAt).localeCompare(String(b.capturedAt)));
+  populateProfileSelect();
   populateSnapshotSelect();
   await ensureSnapshotLoaded(state.selectedIndex);
   await Promise.all([loadWikiMapping(), loadLivePrices()]);
+  state.requestToken += 1;
   render();
 }
 
 els.refreshBtn.addEventListener('click', loadData);
+if (els.deleteSnapshotBtn) {
+  els.deleteSnapshotBtn.addEventListener('click', deleteCurrentSnapshot);
+}
 els.openDataDirBtn.addEventListener('click', async () => {
   try {
     await fetchJson('/api/open-data-dir', {
       method: 'POST',
-      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      headers: stateChangingHeaders()
     });
+    els.statusText.textContent = 'Opened data folder.';
   } catch (error) {
     els.statusText.textContent = `Failed to open data folder: ${error}`;
   }
 });
+if (els.profileSelect) {
+  els.profileSelect.addEventListener('change', async event => {
+    state.activeProfile = event.target.value || '';
+    state.activeTabIndex = 'all';
+    state.filterText = '';
+    state.selectedItemId = null;
+    await setServerActiveProfile(state.activeProfile);
+    await loadData();
+  });
+}
+if (els.dynamicDeltaSelect) {
+  els.dynamicDeltaSelect.value = state.dynamicDeltaMode;
+  els.dynamicDeltaSelect.addEventListener('change', event => {
+    state.dynamicDeltaMode = event.target.value || 'auto';
+    render();
+  });
+}
 els.snapshotSelect.addEventListener('change', async event => {
   state.selectedIndex = Number(event.target.value);
   state.activeTabIndex = 'all';
   await ensureSnapshotLoaded(state.selectedIndex);
   await loadLivePrices();
+  state.requestToken += 1;
   render();
 });
 let searchTimer = null;
