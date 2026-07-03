@@ -12,7 +12,6 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -25,6 +24,7 @@ import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import javax.inject.Singleton;
+import net.runelite.client.RuneLite;
 
 @Singleton
 public class SnapshotStore
@@ -36,7 +36,7 @@ public class SnapshotStore
 
     public SnapshotStore()
     {
-        this(Paths.get(System.getProperty("user.home"), ".runelite", "bank-value-tracker-web"));
+        this(RuneLite.RUNELITE_DIR.toPath().resolve("bank-value-tracker-web"));
     }
 
     public SnapshotStore(Path baseDir)

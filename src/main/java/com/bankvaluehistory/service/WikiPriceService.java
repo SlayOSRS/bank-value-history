@@ -55,12 +55,7 @@ public class WikiPriceService
             return;
         }
 
-        executor = Executors.newSingleThreadScheduledExecutor(r ->
-        {
-            Thread thread = new Thread(r, "bank-value-tracker-wiki-prices");
-            thread.setDaemon(true);
-            return thread;
-        });
+        executor = Executors.newSingleThreadScheduledExecutor();
         executor.execute(this::refreshNow);
         executor.scheduleAtFixedRate(this::refreshNow, 5, 5, TimeUnit.MINUTES);
     }
