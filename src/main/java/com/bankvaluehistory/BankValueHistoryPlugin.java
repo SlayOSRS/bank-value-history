@@ -31,8 +31,6 @@ import org.slf4j.LoggerFactory;
 public class BankValueHistoryPlugin extends Plugin
 {
     private static final Logger log = LoggerFactory.getLogger(BankValueHistoryPlugin.class);
-    private static final int INVENTORY_CONTAINER_ID = 93;
-    private static final int EQUIPMENT_CONTAINER_ID = 94;
 
     @Inject private Client client;
     @Inject private ClientToolbar clientToolbar;
@@ -98,8 +96,8 @@ public class BankValueHistoryPlugin extends Plugin
     public void onItemContainerChanged(ItemContainerChanged event)
     {
         ItemContainer bank = client.getItemContainer(InventoryID.BANK);
-        ItemContainer inventory = client.getItemContainer(INVENTORY_CONTAINER_ID);
-        ItemContainer equipment = client.getItemContainer(EQUIPMENT_CONTAINER_ID);
+        ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+        ItemContainer equipment = client.getItemContainer(InventoryID.WORN);
         if ((bank != null && event.getItemContainer() == bank)
             || (inventory != null && event.getItemContainer() == inventory)
             || (equipment != null && event.getItemContainer() == equipment))
