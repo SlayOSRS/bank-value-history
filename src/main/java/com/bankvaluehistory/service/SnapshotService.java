@@ -19,7 +19,7 @@ import javax.inject.Singleton;
 import net.runelite.api.Client;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
-import net.runelite.api.ItemID;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.VarbitID;
@@ -33,9 +33,6 @@ import org.slf4j.LoggerFactory;
 public class SnapshotService
 {
     private static final Logger log = LoggerFactory.getLogger(SnapshotService.class);
-    private static final int PLATINUM_TOKEN_ID = 13204;
-    private static final int INVENTORY_CONTAINER_ID = 93;
-    private static final int EQUIPMENT_CONTAINER_ID = 94;
     private static final Pattern GE_PATTERN = Pattern.compile("\\(GE:\\s*([0-9,]+)\\)");
     private static final Pattern HA_PATTERN = Pattern.compile("\\(HA:\\s*([0-9,]+)\\)");
 
@@ -237,8 +234,8 @@ public class SnapshotService
         List<LayoutEntry> layoutEntries = readLayoutEntries(bankItemWidget, captureBounds);
 
         PendingItemsResult bankPending = buildPendingItems(profileKey, capturedAt, bank, true);
-        PendingItemsResult inventoryPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(INVENTORY_CONTAINER_ID), false);
-        PendingItemsResult equipmentPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(EQUIPMENT_CONTAINER_ID), false);
+        PendingItemsResult inventoryPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(InventoryID.INV), false);
+        PendingItemsResult equipmentPending = buildPendingItems(profileKey, capturedAt, client.getItemContainer(InventoryID.WORN), false);
 
         long bankGe = bankPending.geTotal;
         long bankHa = bankPending.haTotal;
@@ -337,14 +334,14 @@ public class SnapshotService
             int canonicalItemId = itemManager.canonicalize(itemId);
             String name = itemManager.getItemComposition(itemId).getName();
 
-            int geUnit = 0;
+            long geUnit = 0L;
             int haUnit = 0;
             long geTotal = 0L;
             long haTotal = 0L;
 
             if (!placeholder)
             {
-                geUnit = Math.max(0, itemManager.getItemPrice(itemId));
+                geUnit = Math.max(0L, itemManager.getItemPrice(itemId));
                 haUnit = Math.max(0, getHaPrice(itemId));
                 geTotal = (long) geUnit * quantity;
                 haTotal = (long) haUnit * quantity;
@@ -582,7 +579,7 @@ public class SnapshotService
         {
             case ItemID.COINS:
                 return 1;
-            case PLATINUM_TOKEN_ID:
+            case ItemID.PLATINUM:
                 return 1000;
             default:
                 return itemManager.getItemComposition(itemId).getHaPrice();
@@ -893,7 +890,7 @@ public class SnapshotService
         private final int itemId;
         private final int canonicalItemId;
         private final int quantity;
-        private final int geUnitPrice;
+        private final long geUnitPrice;
         private final int haUnitPrice;
         private final String name;
         private final String iconPath;
@@ -907,7 +904,7 @@ public class SnapshotService
             int canonicalItemId,
             String name,
             int quantity,
-            int geUnitPrice,
+            long geUnitPrice,
             long geTotal,
             int haUnitPrice,
             long haTotal,
