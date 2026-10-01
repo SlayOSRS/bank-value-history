@@ -1,12 +1,6 @@
 package com.bankvaluehistory.service;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
@@ -21,7 +15,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.inject.Inject;
 import javax.inject.Singleton;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,16 +29,13 @@ import org.slf4j.LoggerFactory;
 public class WikiPriceService
 {
     private static final Logger log = LoggerFactory.getLogger(WikiPriceService.class);
-    private static final URI LATEST_URI = URI.create("https://prices.runescape.wiki/api/v1/osrs/latest");
-    private static final URI MAPPING_URI = URI.create("https://prices.runescape.wiki/api/v1/osrs/mapping");
-    private static final String TIMESERIES_BASE = "https://prices.runescape.wiki/api/v1/osrs/timeseries";
+    private static final HttpUrl LATEST_URL = HttpUrl.get("https://prices.runescape.wiki/api/v1/osrs/latest");
+    private static final HttpUrl MAPPING_URL = HttpUrl.get("https://prices.runescape.wiki/api/v1/osrs/mapping");
+    private static final HttpUrl TIMESERIES_URL = HttpUrl.get("https://prices.runescape.wiki/api/v1/osrs/timeseries");
     private static final Pattern ITEM_PATTERN = Pattern.compile("\"(\\d+)\"\\s*:\\s*\\{\\s*\"high\"\\s*:\\s*(null|\\d+)\\s*,\\s*\"highTime\"\\s*:\\s*(null|\\d+)\\s*,\\s*\"low\"\\s*:\\s*(null|\\d+)\\s*,\\s*\"lowTime\"\\s*:\\s*(null|\\d+)\\s*\\}");
     private static final String USER_AGENT = "bank-value-tracker/0.7 (local RuneLite plugin dashboard)";
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(10))
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .build();
+    private final OkHttpClient httpClient;
 
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
     private final ConcurrentHashMap<Integer, PricePoint> latestPrices = new ConcurrentHashMap<>();
@@ -47,6 +44,12 @@ public class WikiPriceService
 
     private ScheduledExecutorService executor;
     private volatile Instant lastRefresh = Instant.EPOCH;
+
+    @Inject
+    public WikiPriceService(OkHttpClient httpClient)
+    {
+        this.httpClient = httpClient;
+    }
 
     public synchronized void start()
     {
@@ -88,7 +91,7 @@ public class WikiPriceService
         StringBuilder sb = new StringBuilder(256 + uniqueIds.size() * 72);
         sb.append('{');
         appendJsonField(sb, "fetchedAt", lastRefresh.equals(Instant.EPOCH) ? null : lastRefresh.toString()).append(',');
-        appendJsonField(sb, "source", LATEST_URI.toString()).append(',');
+        appendJsonField(sb, "source", LATEST_URL.toString()).append(',');
         sb.append("\"data\":{");
         boolean first = true;
         for (Integer id : uniqueIds)
@@ -131,18 +134,25 @@ public class WikiPriceService
 
         try
         {
-            String uri = TIMESERIES_BASE
-                + "?id=" + itemId
-                + "&timestep=" + URLEncoder.encode(normalized, StandardCharsets.UTF_8);
-            HttpResponse<String> response = httpClient.send(buildJsonRequest(URI.create(uri), Duration.ofSeconds(20)), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 == 2 && response.body() != null && !response.body().isEmpty())
+            HttpUrl url = TIMESERIES_URL.newBuilder()
+                .addQueryParameter("id", Integer.toString(itemId))
+                .addQueryParameter("timestep", normalized)
+                .build();
+            try (Response response = httpClient.newCall(buildJsonRequest(url)).execute())
             {
-                String body = response.body();
-                timeseriesCache.put(key, new CachedJson(body, Instant.now()));
-                return body;
+                ResponseBody responseBody = response.body();
+                if (response.isSuccessful() && responseBody != null)
+                {
+                    String body = responseBody.string();
+                    if (!body.isEmpty())
+                    {
+                        timeseriesCache.put(key, new CachedJson(body, Instant.now()));
+                        return body;
+                    }
+                }
             }
         }
-        catch (IOException | InterruptedException ex)
+        catch (IOException ex)
         {
             log.debug("Unable to fetch wiki timeseries for {} {}", itemId, normalized, ex);
         }
@@ -179,14 +189,21 @@ public class WikiPriceService
 
         try
         {
-            HttpResponse<String> response = httpClient.send(buildJsonRequest(MAPPING_URI, Duration.ofSeconds(20)), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 == 2 && response.body() != null && !response.body().isEmpty())
+            try (Response response = httpClient.newCall(buildJsonRequest(MAPPING_URL)).execute())
             {
-                mappingCache = new CachedJson(response.body(), Instant.now());
-                return response.body();
+                ResponseBody responseBody = response.body();
+                if (response.isSuccessful() && responseBody != null)
+                {
+                    String body = responseBody.string();
+                    if (!body.isEmpty())
+                    {
+                        mappingCache = new CachedJson(body, Instant.now());
+                        return body;
+                    }
+                }
             }
         }
-        catch (IOException | InterruptedException ex)
+        catch (IOException ex)
         {
             log.debug("Unable to fetch wiki mapping", ex);
         }
@@ -194,14 +211,14 @@ public class WikiPriceService
         return cached != null ? cached.body : "[]";
     }
 
-    private HttpRequest buildJsonRequest(URI uri, Duration timeout)
+    private Request buildJsonRequest(HttpUrl url)
     {
-        return HttpRequest.newBuilder(uri)
-            .timeout(timeout)
+        return new Request.Builder()
+            .url(url)
             .header("User-Agent", USER_AGENT)
             .header("x-user-agent", USER_AGENT)
             .header("Accept", "application/json")
-            .GET()
+            .get()
             .build();
     }
 
@@ -214,22 +231,30 @@ public class WikiPriceService
 
         try
         {
-            HttpResponse<String> response = httpClient.send(buildJsonRequest(LATEST_URI, Duration.ofSeconds(20)), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2)
+            try (Response response = httpClient.newCall(buildJsonRequest(LATEST_URL)).execute())
             {
-                log.debug("Wiki price refresh returned HTTP {}", response.statusCode());
-                return;
-            }
+                if (!response.isSuccessful())
+                {
+                    log.debug("Wiki price refresh returned HTTP {}", response.code());
+                    return;
+                }
 
-            Map<Integer, PricePoint> parsed = parseLatest(response.body());
-            if (!parsed.isEmpty())
-            {
-                latestPrices.clear();
-                latestPrices.putAll(parsed);
-                lastRefresh = Instant.now();
+                ResponseBody responseBody = response.body();
+                if (responseBody == null)
+                {
+                    return;
+                }
+
+                Map<Integer, PricePoint> parsed = parseLatest(responseBody.string());
+                if (!parsed.isEmpty())
+                {
+                    latestPrices.clear();
+                    latestPrices.putAll(parsed);
+                    lastRefresh = Instant.now();
+                }
             }
         }
-        catch (IOException | InterruptedException ex)
+        catch (IOException ex)
         {
             log.debug("Unable to refresh live wiki prices", ex);
         }
