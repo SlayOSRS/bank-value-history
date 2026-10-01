@@ -6,7 +6,7 @@ public class ItemSnapshot
     private final int canonicalItemId;
     private final String name;
     private final int quantity;
-    private final int geUnitPrice;
+    private final long geUnitPrice;
     private final long geTotal;
     private final int haUnitPrice;
     private final long haTotal;
@@ -20,7 +20,7 @@ public class ItemSnapshot
     private final int layoutW;
     private final int layoutH;
 
-    public ItemSnapshot(int itemId, int canonicalItemId, String name, int quantity, int geUnitPrice, long geTotal,
+    public ItemSnapshot(int itemId, int canonicalItemId, String name, int quantity, long geUnitPrice, long geTotal,
         int haUnitPrice, long haTotal, int slotIndex, int tabIndex, String tabName, String iconPath,
         boolean placeholder, int layoutX, int layoutY, int layoutW, int layoutH)
     {
@@ -47,7 +47,7 @@ public class ItemSnapshot
     public int getCanonicalItemId() { return canonicalItemId; }
     public String getName() { return name; }
     public int getQuantity() { return quantity; }
-    public int getGeUnitPrice() { return geUnitPrice; }
+    public long getGeUnitPrice() { return geUnitPrice; }
     public long getGeTotal() { return geTotal; }
     public int getHaUnitPrice() { return haUnitPrice; }
     public long getHaTotal() { return haTotal; }
