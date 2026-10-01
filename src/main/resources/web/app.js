@@ -674,7 +674,7 @@ function byCanonical(snapshot) {
   return map;
 }
 
-function computeMovers(current, previous, limit = 20) {
+function computeMovers(current, previous, limit = 30) {
   const prevMap = previous ? byCanonical(previous) : new Map();
   const currentMap = byCanonical(current);
   const ids = new Set([...currentMap.keys(), ...prevMap.keys()]);
