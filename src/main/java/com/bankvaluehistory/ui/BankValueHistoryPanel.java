@@ -5,13 +5,11 @@ import com.bankvaluehistory.service.LocalDashboardServer;
 import com.bankvaluehistory.service.SnapshotService;
 import java.awt.BorderLayout;
 import java.awt.Cursor;
-import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.event.ActionEvent;
-import java.io.IOException;
 import java.nio.file.Path;
 import javax.inject.Inject;
 import javax.swing.BorderFactory;
@@ -99,7 +97,7 @@ public class BankValueHistoryPanel extends PluginPanel
 
         panel.add(Box.createRigidArea(new Dimension(0, 6)));
 
-        JPanel grid = new JPanel(new GridLayout(5, 1, 0, 4));
+        JPanel grid = new JPanel(new GridLayout(4, 1, 0, 4));
         grid.setOpaque(false);
 
         JButton capture = button("Capture snapshot");
@@ -125,14 +123,10 @@ public class BankValueHistoryPanel extends PluginPanel
             refreshStatus();
         });
 
-        JButton folder = button("Open data folder");
-        folder.addActionListener(e -> openDataFolder());
-
         grid.add(capture);
         grid.add(open);
         grid.add(restart);
         grid.add(stop);
-        grid.add(folder);
         panel.add(grid);
         return panel;
     }
@@ -287,25 +281,6 @@ public class BankValueHistoryPanel extends PluginPanel
         button.setPreferredSize(new Dimension(0, 24));
         button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
         return button;
-    }
-
-    private void openDataFolder()
-    {
-        if (!Desktop.isDesktopSupported())
-        {
-            setHint("Desktop integration is not available on this system.");
-            return;
-        }
-
-        try
-        {
-            Desktop.getDesktop().open(snapshotService.getSnapshotStore().getBaseDir().toFile());
-            setHint("Opened the data folder.");
-        }
-        catch (IOException ex)
-        {
-            setHint("Unable to open the data folder.");
-        }
     }
 
     private void setHint(String text)
