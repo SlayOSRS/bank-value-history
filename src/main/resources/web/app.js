@@ -26,7 +26,6 @@ const state = {
 const els = {
   statusText: document.getElementById('statusText'),
   profileTitle: document.getElementById('profileTitle'),
-  openDataDirBtn: document.getElementById('openDataDirBtn'),
   refreshBtn: document.getElementById('refreshBtn'),
   deleteSnapshotBtn: document.getElementById('deleteSnapshotBtn'),
   profileSelect: document.getElementById('profileSelect'),
@@ -674,7 +673,7 @@ function byCanonical(snapshot) {
   return map;
 }
 
-function computeMovers(current, previous, limit = 30) {
+function computeMovers(current, previous, limit = 20) {
   const prevMap = previous ? byCanonical(previous) : new Map();
   const currentMap = byCanonical(current);
   const ids = new Set([...currentMap.keys(), ...prevMap.keys()]);
@@ -788,12 +787,12 @@ function renderLoadoutSummary(snapshot) {
   const inventoryItems = snapshotInventoryItems(snapshot).filter(item => !item.placeholder);
   const equipmentItems = snapshotEquipmentItems(snapshot).filter(item => !item.placeholder);
   const cards = [
-    ['Inventory GE', gpSpan(snapshotInventoryGe(snapshot))],
-    ['Inventory HA', gpSpan(snapshotInventoryHa(snapshot))],
-    ['Inventory used slots', numberSpan(inventoryItems.length)],
     ['Worn GE', gpSpan(snapshotEquipmentGe(snapshot))],
     ['Worn HA', gpSpan(snapshotEquipmentHa(snapshot))],
     ['Worn used slots', numberSpan(equipmentItems.length)],
+    ['Inventory GE', gpSpan(snapshotInventoryGe(snapshot))],
+    ['Inventory HA', gpSpan(snapshotInventoryHa(snapshot))],
+    ['Inventory used slots', numberSpan(inventoryItems.length)],
     ['Combined GE', gpSpan(snapshotCombinedGe(snapshot))],
     ['Combined HA', gpSpan(snapshotCombinedHa(snapshot))]
   ];
@@ -2248,17 +2247,6 @@ els.refreshBtn.addEventListener('click', loadData);
 if (els.deleteSnapshotBtn) {
   els.deleteSnapshotBtn.addEventListener('click', deleteCurrentSnapshot);
 }
-els.openDataDirBtn.addEventListener('click', async () => {
-  try {
-    await fetchJson('/api/open-data-dir', {
-      method: 'POST',
-      headers: stateChangingHeaders()
-    });
-    els.statusText.textContent = 'Opened data folder.';
-  } catch (error) {
-    els.statusText.textContent = `Failed to open data folder: ${error}`;
-  }
-});
 if (els.profileSelect) {
   els.profileSelect.addEventListener('change', async event => {
     state.activeProfile = event.target.value || '';
