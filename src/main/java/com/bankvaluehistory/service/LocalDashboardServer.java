@@ -5,7 +5,6 @@ import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import java.awt.Desktop;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.BindException;
@@ -34,6 +33,7 @@ import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import net.runelite.client.util.LinkBrowser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -109,7 +109,6 @@ public class LocalDashboardServer
         server.createContext("/api/latest", this::handleLatest);
         server.createContext("/api/snapshots", this::handleSnapshots);
         server.createContext("/api/snapshot", this::handleSnapshot);
-        server.createContext("/api/open-data-dir", this::handleOpenDataDir);
         server.createContext("/api/wiki-prices", this::handleWikiPrices);
         server.createContext("/api/wiki-mapping", this::handleWikiMapping);
         server.createContext("/api/item-timeseries", this::handleItemTimeseries);
@@ -173,19 +172,7 @@ public class LocalDashboardServer
     public void openBrowser(String profileKey)
     {
         setActiveProfile(profileKey);
-        if (!Desktop.isDesktopSupported())
-        {
-            return;
-        }
-
-        try
-        {
-            Desktop.getDesktop().browse(URI.create(getBaseUrl()));
-        }
-        catch (IOException ex)
-        {
-            log.warn("Unable to open dashboard browser", ex);
-        }
+        LinkBrowser.browse(getBaseUrl());
     }
 
     private int currentPort()
@@ -318,35 +305,6 @@ public class LocalDashboardServer
         }
 
         writeJson(exchange, 200, snapshot.get());
-    }
-
-    private void handleOpenDataDir(HttpExchange exchange) throws IOException
-    {
-        if (!requireMethod(exchange, "POST"))
-        {
-            return;
-        }
-        if (!requireLocalStateChangingRequest(exchange))
-        {
-            return;
-        }
-
-        if (!Desktop.isDesktopSupported())
-        {
-            writeJson(exchange, 500, "{\"error\":\"desktop integration not available\"}");
-            return;
-        }
-
-        try
-        {
-            Desktop.getDesktop().open(snapshotStore.getBaseDir().toFile());
-            writeJson(exchange, 200, "{\"ok\":true}");
-        }
-        catch (IOException ex)
-        {
-            log.warn("Unable to open data directory", ex);
-            writeJson(exchange, 500, "{\"error\":\"unable to open data directory\"}");
-        }
     }
 
     private void handleWikiPrices(HttpExchange exchange) throws IOException
